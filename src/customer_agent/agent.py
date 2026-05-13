@@ -128,17 +128,22 @@ Always extract the order ID from the message if present."""),
 
         # Check if order ID is present
         has_order_id = order_id != "UNKNOWN"
+        has_sensitive_keyword = any(keyword in user_message_lower for keyword in sensitive_keywords)
 
         if has_order_id:
             # Always lookup order if ID is present
             tools_to_use = ["lookup_order"]
 
             # Add create_refund_case if sensitive action detected
-            if any(keyword in user_message_lower for keyword in sensitive_keywords):
+            if has_sensitive_keyword:
                 tools_to_use.append("create_refund_case")
                 draft_response = f"Based on your inquiry about order {order_id}, I found:"
             else:
                 draft_response = f"Based on your inquiry about order {order_id}, I found:"
+        elif has_sensitive_keyword:
+            # No order ID but has sensitive keywords - still need to create refund case
+            tools_to_use = ["create_refund_case"]
+            draft_response = response_content
 
         # Extract confidence from LLM metadata
         if hasattr(response, 'additional_kwargs'):

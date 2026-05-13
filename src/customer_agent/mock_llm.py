@@ -59,10 +59,35 @@ INTENT_PATTERNS: list[IntentPattern] = [
         suggested_action="lookup_order",
     ),
     IntentPattern(
-        keywords=("refund", "退款", "cancel", "取消", "complaint", "投诉", "chargeback"),
-        response="I understand you need help with this matter. Let me look into it for you.",
-        confidence=0.75,
-        suggested_action="lookup_order",
+        keywords=("refund", "退款"),
+        response="I understand you need a refund. Let me help you process this request.",
+        confidence=0.80,
+        suggested_action="create_refund_case",
+    ),
+    IntentPattern(
+        keywords=("cancel", "取消"),
+        response="I understand you want to cancel your order. Let me help you with that.",
+        confidence=0.80,
+        suggested_action="create_refund_case",
+    ),
+    IntentPattern(
+        keywords=("complaint", "投诉"),
+        response="I'm sorry to hear about your experience. Let me create a complaint case for you.",
+        confidence=0.80,
+        suggested_action="create_refund_case",
+    ),
+    IntentPattern(
+        keywords=("chargeback",),  # Note: trailing comma for single-element tuple
+        response="I understand you need to dispute a charge. Let me look into this matter.",
+        confidence=0.80,
+        suggested_action="create_refund_case",
+    ),
+    # Note: 'thanks' pattern must come before 'greeting' to match first
+    IntentPattern(
+        keywords=("thank", "thanks", "谢谢", "感谢"),
+        response="You're welcome! Is there anything else I can help you with?",
+        confidence=0.95,
+        suggested_action=None,
     ),
     IntentPattern(
         keywords=("hello", "hi", "你好", "问"),
@@ -71,9 +96,9 @@ INTENT_PATTERNS: list[IntentPattern] = [
         suggested_action=None,
     ),
     IntentPattern(
-        keywords=("thank", "thanks", "谢谢", "感谢", "help"),
-        response="You're welcome! Is there anything else I can help you with?",
-        confidence=0.95,
+        keywords=("weather", "天气", "news", "新闻", "time", "时间"),
+        response="I'm a customer service assistant, I can help you with order-related questions. For other inquiries, please visit our main website.",
+        confidence=0.90,
         suggested_action=None,
     ),
 ]
