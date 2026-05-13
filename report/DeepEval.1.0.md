@@ -42,47 +42,28 @@
 
 ### 1.4 项目结构
 
-```
-/workspace/projects/
-├── src/
-│   ├── customer_agent/           # 客服 Agent
-│   │   ├── agent.py             # LangGraph PEV 状态图
-│   │   ├── mock_llm.py         # Mock LLM 实现
-│   │   ├── policies.py          # 策略验证
-│   │   └── tools.py             # 工具定义
-│   │
-│   ├── office_agent/            # 办公助手 Agent
-│   │   ├── base.py              # 共享基类和接口
-│   │   ├── planner.py           # Planner Agent (任务规划)
-│   │   ├── executor.py          # Task Executor (并行执行)
-│   │   ├── verify.py             # Verify Agent (进度验证)
-│   │   ├── human_loop.py        # Human-in-the-Loop
-│   │   ├── office_agent.py       # 主入口和流程编排
-│   │   ├── scenarios.py          # 办公场景定义
-│   │   └── sub_agents/           # 子 Agent 集合
-│   │       ├── browser_agent.py
-│   │       ├── api_agent.py
-│   │       ├── doc_agent.py
-│   │       ├── data_agent.py
-│   │       ├── visualization_agent.py
-│   │       └── registry.py
-│   │
-│   └── shared/                   # 共享模块（未来扩展）
-│       └── __init__.py
-│
-├── examples/
-│   ├── run_demo.py              # Customer Agent Demo
-│   └── run_office_agent.py       # Office Agent Demo
-│
-├── tests/                        # Customer Agent 测试
-│   ├── conftest.py
-│   └── evals/
-│
-├── report/                       # 文档
-│   └── DeepEval.1.0.md
-│
-├── pyproject.toml
-└── requirements.txt
+```mermaid
+mindmap
+  root((项目结构))
+    src
+      customer_agent
+        agent.py
+        mock_llm.py
+        policies.py
+        tools.py
+      office_agent
+        base.py
+        planner.py
+        executor.py
+        verify.py
+        human_loop.py
+        office_agent.py
+        scenarios.py
+        sub_agents
+    examples
+    tests
+    report
+    configs
 ```
 
 ---
@@ -93,55 +74,66 @@
 
 PEV (Plan-Execute-Verify) 是一种确定性较强的 Agent 架构模式：
 
+```mermaid
+graph TD
+    A[User Input<br/>"Where is my order #A100?"] --> B[PLAN Node]
+    
+    B --> C{Analyze Intent}
+    C -->|order_status| D[Select Tool: lookup_order]
+    C -->|greeting| E[No Tool Needed]
+    C -->|refund| F[Select Tool: create_refund_case]
+    
+    D --> G[EXECUTE Node]
+    E --> L[FINAL Node]
+    F --> G
+    
+    G --> H[Call Tool]
+    H --> I[Collect Results]
+    I --> J[VERIFY Node]
+    
+    J --> K{Check Policy}
+    K -->|Safe| L
+    K -->|Requires Review| M[HUMAN_REVIEW Node]
+    
+    M -->|Approved| L
+    M -->|Rejected| N[Error Response]
+    
+    L --> O[Final Response]
+    
+    style A fill:#e1f5fe
+    style L fill:#c8e6c9
+    style M fill:#fff3e0
+    style O fill:#c8e6c9
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                           User Input                              │
-│                     "Where is my order #A100?"                   │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         PLAN Node                                 │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ - 分析用户意图 (intent)                                  │     │
-│  │ - 决定需要调用的工具 (tools)                             │     │
-│  │ - 生成草稿回复 (draft_response)                          │     │
-│  │ - 评估置信度 (confidence)                                 │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│  输出: {intent: "order_status", tools: ["lookup_order"],          │
-│        confidence: 0.85, draft_response: "..."}                   │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        EXECUTE Node                               │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ - 根据 PLAN 决定调用对应工具                              │     │
-│  │ - 收集工具返回结果                                        │     │
-│  │ - 追加到草稿回复                                          │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│  输出: {tool_calls: [...], tool_results: ["Order A100 is..."]}  │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        VERIFY Node                               │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ - 调用 policies.verify_policy()                          │     │
-│  │ - 检查敏感关键词 (refund/complaint/cancel)               │     │
-│  │ - 检查置信度阈值 (< 0.7 需人工审批)                       │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│  输出: PolicyDecision {requires_human: False, reason: "..."}    │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                    ┌─────────────┴─────────────┐
-                    │                           │
-                    ▼                           ▼
-┌─────────────────────────────┐    ┌─────────────────────────────┐
-│     requires_human=False    │    │     requires_human=True     │
-│         ↓ 直接回复          │    │        HUMAN_REVIEW         │
-│         结束                │    │  (可选人工审批流程)          │
-└─────────────────────────────┘    └─────────────────────────────┘
+
+**PLAN Node:**
+- 分析用户意图 (intent)
+- 决定需要调用的工具 (tools)
+- 生成草稿回复 (draft_response)
+- 评估置信度 (confidence)
+
+**输出:** `{intent: "order_status", tools: ["lookup_order"], confidence: 0.85, draft_response: "..."}`
+
+**EXECUTE Node:**
+- 根据 PLAN 决定调用对应工具
+- 收集工具返回结果
+- 追加到草稿回复
+
+**输出:** `{tool_calls: [...], tool_results: ["Order A100 is..."]}`
+
+**VERIFY Node:**
+- 调用 policies.verify_policy()
+- 检查敏感关键词 (refund/complaint/cancel)
+- 检查置信度阈值 (< 0.7 需人工审批)
+
+**输出:** `PolicyDecision {requires_human: False, reason: "..."}`
+
+```mermaid
+graph LR
+    A[requires_human=False] -->|直接回复| B[结束]
+    C[requires_human=True] -->|人工审批| D{Human Review}
+    D -->|批准| E[结束]
+    D -->|拒绝| F[错误响应]
 ```
 
 #### 2.1.1 Human-in-the-Loop 机制
@@ -158,108 +150,102 @@ PEV (Plan-Execute-Verify) 是一种确定性较强的 Agent 架构模式：
 
 Office Agent 使用 Planner-Executor-Verify 架构，并行调度多个专业 Sub Agent：
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                          User Request                             │
-│                  "帮我生成上周的销售周报"                          │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    PLANNER AGENT                                  │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ MockReasoningModel (模拟 o1 高阶推理)                    │     │
-│  │                                                          │     │
-│  │ - 分析用户请求的复杂意图                                 │     │
-│  │ - 拆解为多个原子 Task                                    │     │
-│  │ - 确定 Task 依赖关系（并行/串行）                        │     │
-│  │ - 定义每个 Task 的预期输出                               │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│  输出: TaskPlan {                                               │
-│    tasks: [Task(id=1, capability=API, ...),                      │
-│            Task(id=2, capability=DATA, depends_on=[1], ...),     │
-│            ...],                                                 │
-│    overall_goal: "生成完整周报",                                  │
-│    final_task_id: 7                                              │
-│  }                                                               │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    TASK EXECUTOR                                  │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ ThreadPoolExecutor (并行执行)                            │     │
-│  │                                                          │     │
-│  │ - 从可执行队列取出 Task                                  │     │
-│  │ - 根据 capability 选择对应 Sub Agent                     │     │
-│  │ - 通过 AgentRegistry 调度                                │     │
-│  │ - 管理 Task 依赖关系（等待前置完成）                     │     │
-│  │ - 收集结果存入 shared_data                              │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│                                                                  │
-│  输出: completed_tasks=[], shared_data={...}                    │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │                   │                   │
-              ▼                   ▼                   ▼
-┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│    API Agent        │ │    Data Agent       │ │   Browser Agent     │
-│  (调用 OpenAPI)     │ │  (数据统计分析)      │ │   (网页浏览)        │
-└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
-              │                   │                   │
-              └───────────────────┼───────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    VERIFY AGENT                                  │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ MockVerificationModel (验证模型)                        │     │
-│  │                                                          │     │
-│  │ - 遍历每个 Task 的预期 vs 实际结果                       │     │
-│  │ - 判断 Task 是否达到完成状态                             │     │
-│  │ - 识别缺失信息和需要补充的数据                           │     │
-│  │ - 决定是否需要 Human-in-the-Loop                        │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│  输出: VerificationResult {                                      │
-│    is_complete: bool,                                            │
-│    missing_info: [{task_id, description, suggestions}],         │
-│    updated_tasks: [...]                                           │
-│  }                                                               │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-              ┌───────────────────┴───────────────────┐
-              │                                       │
-              ▼                                       ▼
-┌─────────────────────────────┐    ┌─────────────────────────────┐
-│      is_complete = True     │    │   missing_info 非空         │
-│          ↓ 直接结束          │    │         ↓ HUMAN_LOOP        │
-│      输出最终结果             │    │   等待用户补充信息           │
-└─────────────────────────────┘    │   (有超时限制)               │
-                                   │         ↓ 继续执行            │
-                                   └─────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph PLAN["PLANNER AGENT"]
+        P1[MockReasoningModel<br/>模拟 o1 高阶推理]
+        P1 --> P2[分析用户请求]
+        P2 --> P3[拆解为多个原子 Task]
+        P3 --> P4[确定 Task 依赖关系]
+        P4 --> P5[定义预期输出]
+        P5 --> P6[TaskPlan<br/>tasks: [...]<br/>overall_goal<br/>final_task_id]
+    end
+    
+    subgraph EXEC["TASK EXECUTOR"]
+        E1[ThreadPoolExecutor<br/>并行执行]
+        E1 --> E2[从可执行队列取出 Task]
+        E2 --> E3[根据 capability 选择 Sub Agent]
+        E3 --> E4[通过 AgentRegistry 调度]
+        E4 --> E5[管理 Task 依赖关系]
+        E5 --> E6[收集结果存入 shared_data]
+    end
+    
+    P6 -->|Task Plan| E1
+    
+    E6 --> S1[API Agent]
+    E6 --> S2[Data Agent]
+    E6 --> S3[Browser Agent]
+    E6 --> S4[Doc Agent]
+    E6 --> S5[Visualization Agent]
+    
+    S1 & S2 & S3 & S4 & S5 --> V1
+    
+    subgraph VERIFY["VERIFY AGENT"]
+        V1[MockVerificationModel<br/>验证模型]
+        V1 --> V2[对比预期 vs 实际结果]
+        V2 --> V3[判断完成状态]
+        V3 --> V4[识别缺失信息]
+        V4 --> V5[VerificationResult<br/>is_complete<br/>missing_info<br/>updated_tasks]
+    end
+    
+    V5 -->|is_complete=True| FINISH[输出最终结果]
+    V5 -->|missing_info 非空| HL[Human-in-the-Loop<br/>等待用户补充信息<br/>超时限制]
+    HL -->|继续执行| E1
+    
+    style PLAN fill:#bbdefb,stroke:#1976d2
+    style EXEC fill:#c8e6c9,stroke:#388e3c
+    style VERIFY fill:#fff3e0,stroke:#f57c00
+    style FINISH fill:#c8e6c9
+    style HL fill:#ffccbc,stroke:#e64a19
 ```
 
 #### 2.2.1 Sub Agent 架构
 
-```
-AgentRegistry (单例)
-       │
-       ├── API Agent ──────► API Gateway / OpenAPI
-       ├── Browser Agent ──► Selenium / Requests
-       ├── Doc Agent ──────► File I/O / Pandoc
-       ├── Data Agent ─────► Pandas / SQLite
-       └── Visualization Agent ─► Matplotlib / Pandas
-
-每个 Sub Agent 继承 BaseSubAgent:
-┌─────────────────────────────────────┐
-│         BaseSubAgent                │
-├─────────────────────────────────────┤
-│  capability: AgentCapability        │
-│  execute(task, shared_data) → Result│
-│  validate(task) → bool             │
-└─────────────────────────────────────┘
+```mermaid
+classDiagram
+    class AgentRegistry {
+        +get_agent(capability: AgentCapability): BaseSubAgent
+        +register(agent: BaseSubAgent)
+        +get_all_capabilities(): List[AgentCapability]
+    }
+    
+    class BaseSubAgent {
+        +capability: AgentCapability
+        +execute(task: Task, shared_data: dict): TaskResult
+        +validate(task: Task): bool
+    }
+    
+    class APIAgent {
+        +capability: AgentCapability.API
+        +execute(task, shared_data): TaskResult
+    }
+    
+    class DataAgent {
+        +capability: AgentCapability.DATA
+        +execute(task, shared_data): TaskResult
+    }
+    
+    class BrowserAgent {
+        +capability: AgentCapability.BROWSER
+        +execute(task, shared_data): TaskResult
+    }
+    
+    class DocAgent {
+        +capability: AgentCapability.DOC
+        +execute(task, shared_data): TaskResult
+    }
+    
+    class VisualizationAgent {
+        +capability: AgentCapability.VISUALIZATION
+        +execute(task, shared_data): TaskResult
+    }
+    
+    AgentRegistry --> BaseSubAgent
+    BaseSubAgent <|-- APIAgent
+    BaseSubAgent <|-- DataAgent
+    BaseSubAgent <|-- BrowserAgent
+    BaseSubAgent <|-- DocAgent
+    BaseSubAgent <|-- VisualizationAgent
 ```
 
 ### 2.3 两个 Agent 的区别
@@ -283,62 +269,71 @@ AgentRegistry (单例)
 
 #### 3.1.1 状态定义
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    AgentState                            │
-├─────────────────────────────────────────────────────────┤
-│  user_message: str          ← 用户输入                   │
-│  current_stage: AgentStage  ← 当前阶段                    │
-│  plan: PlanResult          ← PLAN 阶段输出               │
-│  execute: ExecuteResult    ← EXECUTE 阶段输出            │
-│  verify: VerifyResult      ← VERIFY 阶段输出             │
-│  human_review: HumanReviewResult ← HUMAN_REVIEW 输出     │
-│  final_response: str        ← 最终回复                   │
-│  messages: list            ← 消息历史                    │
-│  error: str | None         ← 错误信息                    │
-└─────────────────────────────────────────────────────────┘
+#### 3.1.1 状态定义
 
-AgentStage 枚举:
-  ┌─────────┬─────────┬─────────┬─────────────┬─────────┐
-  │  PLAN   │ EXECUTE │ VERIFY  │ HUMAN_REVIEW│  FINAL │
-  └─────────┴─────────┴─────────┴─────────────┴─────────┘
+```mermaid
+classDiagram
+    class AgentState {
+        +str user_message
+        +AgentStage current_stage
+        +PlanResult plan
+        +ExecuteResult execute
+        +VerifyResult verify
+        +HumanReviewResult human_review
+        +str final_response
+        +list messages
+        +str|None error
+    }
+    
+    class AgentStage {
+        <<enumeration>>
+        PLAN
+        EXECUTE
+        VERIFY
+        HUMAN_REVIEW
+        FINAL
+    }
+    
+    AgentState --> AgentStage
 ```
 
 #### 3.1.2 Mock LLM 设计
 
 Mock LLM 通过**意图模式匹配**模拟 LLM 的响应：
 
+```mermaid
+classDiagram
+    class IntentPattern {
+        +tuple keywords
+        +str response
+        +float confidence
+        +str|None suggested_action
+    }
+    
+    class PlanResult {
+        +str intent
+        +list tools
+        +float confidence
+        +str draft_response
+    }
+    
+    IntentPattern --> PlanResult : produces
 ```
-┌────────────────────────────────────────────────────────────┐
-│                    IntentPattern 设计                       │
-├────────────────────────────────────────────────────────────┤
-│  keywords: tuple[str, ...]     ← 匹配的关键词列表          │
-│  response: str                 ← 模拟回复内容              │
-│  confidence: float             ← 置信度 (0.0 ~ 1.0)        │
-│  suggested_action: str | None  ← 建议的工具                │
-└────────────────────────────────────────────────────────────┘
 
-意图匹配流程:
+**意图匹配流程：**
 
-    用户消息
-        │
-        ▼
-┌───────────────────┐
-│ 遍历 IntentPatterns │
-└───────────────────┘
-        │
-        ▼
-┌───────────────────────────────────┐
-│ 检查关键词是否在用户消息中?        │
-└───────────────────────────────────┘
-        │
-    ┌───┴───┐
-    │ Yes   │ No
-    ▼       ▼
-┌───────┐ ┌───────┐
-│ 返回  │ │ 继续  │
-│ 匹配  │ │ 检查  │
-└───────┘ └───────┘
+```mermaid
+flowchart TD
+    A[用户消息] --> B[遍历 IntentPatterns]
+    B --> C{检查关键词}
+    C -->|匹配| D[返回 PlanResult]
+    C -->|不匹配| E{还有更多?}
+    E -->|是| B
+    E -->|否| F[返回默认结果]
+    
+    style A fill:#e1f5fe
+    style D fill:#c8e6c9
+    style F fill:#ffcdd2
 ```
 
 **预定义意图模式表：**
@@ -354,18 +349,16 @@ Mock LLM 通过**意图模式匹配**模拟 LLM 的响应：
 
 #### 规范化 Intent 映射
 
-```
-意图名称规范化规则:
-
-  "order"      → "order_status"
-  "delivery"   → "order_status"
-  "track"      → "order_status"
-  "refund"     → "refund"
-  "cancel"     → "cancel"
-  "complaint"  → "complaint"
-  "hello"      → "greeting"
-  "thank"      → "thanks"
-  ...
+```mermaid
+flowchart LR
+    A1["order"] -->|"→"| B1["order_status"]
+    A2["delivery"] -->|"→"| B1
+    A3["track"] -->|"→"| B1
+    A4["refund"] -->|"→"| B4["refund"]
+    A5["cancel"] -->|"→"| B5["cancel"]
+    A6["complaint"] -->|"→"| B6["complaint"]
+    A7["hello"] -->|"→"| B7["greeting"]
+    A8["thank"] -->|"→"| B8["thanks"]
 ```
 
 #### 使用示例
@@ -385,40 +378,28 @@ MockChatModel 调用示例:
 
 #### PEV 流程时序图
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Customer Agent PEV 流程                          │
-└─────────────────────────────────────────────────────────────────────┘
-
-用户          PLAN              EXECUTE            VERIFY        FINAL
- │              │                   │                  │            │
- │──Message──▶│                    │                  │            │
- │              │                   │                  │            │
- │              │ 1. 调用MockLLM    │                  │            │
- │              │ 2. 分析意图       │                  │            │
- │              │ 3. 选择工具       │                  │            │
- │              │ 4. 提取订单ID     │                  │            │
- │              │────────▶          │                  │            │
- │              │                   │                  │            │
- │              │              1. 执行工具            │            │
- │              │              2. 获取结果            │            │
- │              │                   │────────▶        │            │
- │              │                   │                  │            │
- │              │                   │             1. 策略检查      │
- │              │                   │             2. 敏感词检查    │
- │              │                   │             3. 置信度验证    │
- │              │                   │                  │            │
- │              │                   │                  ├──▶ [需要审批] │
- │              │                   │                  │    HUMAN_REVIEW
- │              │                   │                  │            │
- │              │                   │                  ├──▶ [无需审批] │
- │              │                   │                  │    ◀───────┘
- │              │                   │                  │            │
- │              │                   │                  │◀───────────┘
- │              │                   │                  │            │
- │              │                   │                  │────▶ ◀────┘
- │              │                   │                  │            │
- ◀──────────────────────────Final Response───────────────────────────
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant PLAN as PLAN Node
+    participant EXEC as EXECUTE Node
+    participant VERIFY as VERIFY Node
+    participant REVIEW as HUMAN_REVIEW
+    participant FINAL as FINAL
+    
+    User->>PLAN: 发送消息
+    Note over PLAN: 1. 调用 MockLLM<br/>2. 分析意图<br/>3. 选择工具
+    PLAN->>EXEC: 传递 PlanResult
+    
+    Note over EXEC: 1. 执行工具<br/>2. 获取结果
+    EXEC->>VERIFY: 传递 ExecuteResult
+    
+    Note over VERIFY: 1. 策略检查<br/>2. 敏感词检查<br/>3. 置信度验证
+    VERIFY->>REVIEW: requires_human=True
+    VERIFY->>FINAL: requires_human=False
+    
+    REVIEW->>FINAL: 审批通过/拒绝
+    FINAL-->>User: 返回最终响应
 ```
 
 #### PLAN Node 伪代码
@@ -588,52 +569,41 @@ invoke_customer_agent(user_message, human_approval_func=None):
 
 ### 3.1.4 策略验证
 
+```mermaid
+flowchart TD
+    A[verify_policy] --> B{置信度 < 0.7?}
+    B -->|是| C[requires_human = True<br/>reason = "low_confidence"]
+    B -->|否| D{包含敏感关键词?}
+    D -->|是| E[requires_human = True<br/>reason = "sensitive_action"]
+    D -->|否| F[requires_human = False<br/>reason = "auto_approved"]
+    
+    style C fill:#ffcdd2
+    style E fill:#ffcdd2
+    style F fill:#c8e6c9
 ```
-策略检查规则:
 
-    ┌────────────────────────────────────────┐
-    │              verify_policy()            │
-    ├────────────────────────────────────────┤
-    │  输入: user_message, draft, confidence  │
-    │                                        │
-    │  规则 1: 置信度 < 0.7                  │
-    │     → requires_human = True            │
-    │     → reason = "low_confidence"        │
-    │                                        │
-    │  规则 2: 包含敏感关键词                │
-    │     → requires_human = True            │
-    │     → reason = "sensitive_action"      │
-    │                                        │
-    │  默认:                                 │
-    │     → requires_human = False           │
-    │     → reason = "auto_approved"         │
-    └────────────────────────────────────────┘
-
-敏感关键词:
-    refund, 退款, complaint, 投诉,
-    chargeback, 赔偿, cancel, 取消
-```
+**敏感关键词:** refund, 退款, complaint, 投诉, chargeback, 赔偿, cancel, 取消
 
 ### 3.1.5 工具定义
 
-```
-工具定义:
+| 工具 | 输入 | 输出 | 说明 |
+|------|------|------|------|
+| lookup_order | order_id | 订单状态描述 | 本地 Mock 数据 |
+| create_refund_case | order_id, reason | 工单创建确认 | 仍需人工审批 |
 
-    lookup_order(order_id):
-        输入: 订单号 (如 "A100")
-        输出: 订单状态描述
-
-        ┌──────────────────────────────┐
-        │  本地 Mock 数据:              │
-        │  A100 → "in transit"         │
-        │  B200 → "delivered"          │
-        │  C300 → "payment pending"   │
-        └──────────────────────────────┘
-
-    create_refund_case(order_id, reason):
-        输入: 订单号 + 原因
-        输出: 工单创建确认
-        说明: 仍需人工审批
+```mermaid
+classDiagram
+    class OrderLookupTool {
+        +execute(order_id: str): str
+        +mock_data: dict
+    }
+    
+    class RefundCaseTool {
+        +execute(order_id: str, reason: str): str
+        +requires_human_review: bool
+    }
+    
+    note for OrderLookupTool "Mock Data:<br/>A100 → in transit<br/>B200 → delivered<br/>C300 → payment pending"
 ```
 
 ---
@@ -642,90 +612,80 @@ invoke_customer_agent(user_message, human_approval_func=None):
 
 #### 3.2.1 共享基础设施
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        核心数据结构                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  AgentCapability (枚举):                                        │
-│  ┌────────┬────────┬────────┬──────────┬─────────────────┐      │
-│  │  API   │BROWSER │  DATA  │ DOCUMENT │ VISUALIZATION  │      │
-│  └────────┴────────┴────────┴──────────┴─────────────────┘      │
-│                                                                  │
-│  Task (任务):                                                    │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │  id: str              ← 唯一标识                        │     │
-│  │  description: str     ← 任务描述                        │     │
-│  │  capability: AgentCapability  ← 所需能力               │     │
-│  │  params: dict         ← 任务参数                        │     │
-│  │  depends_on: list[str] ← 依赖的任务 ID                 │     │
-│  │  expected_output: str ← 预期输出描述                    │     │
-│  │  status: str          ← pending/running/completed/failed│     │
-│  │  result: Any          ← 执行结果                        │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│                                                                  │
-│  TaskPlan (任务计划):                                            │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │  overall_goal: str    ← 总体目标                        │     │
-│  │  tasks: list[Task]   ← 任务列表                        │     │
-│  │  final_task_id: str   ← 最终任务 ID                     │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│                                                                  │
-│  VerificationResult (验证结果):                                 │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │  is_complete: bool    ← 是否完成                        │     │
-│  │  missing_info: list  ← 缺失信息列表                     │     │
-│  │  updated_tasks       ← 更新后的任务                     │     │
-│  │  message: str        ← 验证消息                         │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+classDiagram
+    class AgentCapability {
+        <<enumeration>>
+        API
+        BROWSER
+        DATA
+        DOCUMENT
+        VISUALIZATION
+    }
+    
+    class Task {
+        +str id
+        +str description
+        +AgentCapability capability
+        +dict params
+        +list depends_on
+        +str expected_output
+        +str status
+        +Any result
+    }
+    
+    class TaskPlan {
+        +str overall_goal
+        +list tasks
+        +str final_task_id
+    }
+    
+    class VerificationResult {
+        +bool is_complete
+        +list missing_info
+        +list updated_tasks
+        +str message
+    }
+    
+    TaskPlan "1" --> "*" Task
+    VerificationResult --> Task
 ```
 
 #### 3.2.2 Planner Agent
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   MockReasoningModel (Planner)                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  plan(user_request) → TaskPlan                                  │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    规划流程                                │   │
-│  │                                                          │   │
-│  │   用户请求                                                  │   │
-│  │      │                                                     │   │
-│  │      ▼                                                     │   │
-│  │  ┌─────────────────┐                                       │   │
-│  │  │ 匹配预定义场景  │ ──匹配成功──▶ 返回场景任务计划        │   │
-│  │  └────────┬────────┘                                       │   │
-│  │           │ 未匹配                                          │   │
-│  │           ▼                                                 │   │
-│  │  ┌─────────────────┐                                       │   │
-│  │  │   动态关键词分析 │                                       │   │
-│  │  └────────┬────────┘                                       │   │
-│  │           │                                                 │   │
-│  │           ▼                                                 │   │
-│  │  ┌─────────────────────────────────────────────────────┐   │   │
-│  │  │ 关键词 → 能力映射 → Task                             │   │   │
-│  │  │                                                     │   │   │
-│  │  │   销售/订单/报表 → API Agent                         │   │   │
-│  │  │   统计/分析/汇总 → Data Agent                        │   │   │
-│  │  │   报告/文档/生成 → Doc Agent                        │   │   │
-│  │  │   图表/可视化     → Visualization Agent             │   │   │
-│  │  │   搜索/爬取/浏览  → Browser Agent                   │   │   │
-│  │  └─────────────────────────────────────────────────────┘   │   │
-│  │           │                                                 │   │
-│  │           ▼                                                 │   │
-│  │  ┌─────────────────────────────────────────────────────┐   │   │
-│  │  │ 构建 TaskPlan:                                       │   │   │
-│  │  │   - 设置依赖关系 (depends_on)                        │   │   │
-│  │  │   - 设定预期输出 (expected_output)                   │   │   │
-│  │  │   - 指定最终任务 ID (final_task_id)                  │   │   │
-│  │  └─────────────────────────────────────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[用户请求] --> B{匹配预定义场景?}
+    B -->|匹配成功| C[返回场景任务计划]
+    B -->|未匹配| D[动态关键词分析]
+    
+    D --> E[关键词 → 能力映射]
+    E --> F[Task 生成]
+    
+    F --> G[构建 TaskPlan]
+    G --> H[设置依赖关系]
+    H --> I[设定预期输出]
+    I --> J[指定最终任务 ID]
+    
+    C --> K[TaskPlan 输出]
+    J --> K
+    
+    subgraph 关键词映射
+        E1["销售/订单/报表 → API"]
+        E2["统计/分析/汇总 → DATA"]
+        E3["报告/文档/生成 → DOCUMENT"]
+        E4["图表/可视化 → VISUALIZATION"]
+        E5["搜索/爬取/浏览 → BROWSER"]
+    end
+    
+    E --> E1
+    E --> E2
+    E --> E3
+    E --> E4
+    E --> E5
+    
+    style B fill:#e1f5fe
+    style K fill:#c8e6c9
 ```
 
 **关键词 → 能力映射表：**
@@ -740,49 +700,35 @@ invoke_customer_agent(user_message, human_approval_func=None):
 
 #### 3.2.3 Task Executor
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     TaskExecutor (并行执行)                      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  execute_plan(task_plan, shared_data) → (completed_tasks, data)│
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                      执行循环                             │   │
-│  │                                                          │   │
-│  │   ┌─────────────┐                                       │   │
-│  │   │ 是否有待执行 │                                       │   │
-│  │   │ 或运行中任务 │                                       │   │
-│  │   └──────┬──────┘                                       │   │
-│  │     Yes  │  No                                          │   │
-│  │     ┌────┴────┐                                         │   │
-│  │     ▼         ▼                                         │   │
-│  │  ┌────────┐  结束                                        │   │
-│  │  │获取就绪 │                                            │   │
-│  │  │  任务  │                                            │   │
-│  │  └────┬────┘                                            │   │
-│  │       │                                                  │   │
-│  │       ▼                                                  │   │
-│  │  ┌─────────────────────────────────────────────────────┐ │   │
-│  │  │ 检查依赖: task.depends_on ⊆ completed_task_ids     │ │   │
-│  │  └─────────────────────────────────────────────────────┘ │   │
-│  │       │                                                  │   │
-│  │       ▼                                                  │   │
-│  │  ┌─────────────────────────────────────────────────────┐ │   │
-│  │  │     ThreadPoolExecutor (max_workers=5)             │ │   │
-│  │  │                                                     │ │   │
-│  │  │   Task1 ──▶ SubAgent1 ──▶ Result1 ──┐              │ │   │
-│  │  │   Task2 ──▶ SubAgent2 ──▶ Result2 ──┼──▶ shared_data│ │   │
-│  │  │   Task3 ──▶ SubAgent3 ──▶ Result3 ──┘              │ │   │
-│  │  │                                                     │ │   │
-│  │  └─────────────────────────────────────────────────────┘ │   │
-│  │       │                                                  │   │
-│  │       ▼                                                  │   │
-│  │  回调进度 (progress_callback)                            │   │
-│  │       │                                                  │   │
-│  │       └──────────────────────┘                          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A{有待执行任务?} -->|Yes| B[获取就绪任务]
+    A -->|No| Z[结束]
+    
+    B --> C[检查依赖关系]
+    C --> D[ThreadPoolExecutor 并行执行]
+    
+    D --> S1[Task1 → SubAgent1]
+    D --> S2[Task2 → SubAgent2]
+    D --> S3[Task3 → SubAgent3]
+    
+    S1 --> SD[shared_data]
+    S2 --> SD
+    S3 --> SD
+    
+    SD --> P[回调进度]
+    P --> A
+    
+    subgraph ThreadPoolExecutor
+        direction LR
+        S1
+        S2
+        S3
+    end
+    
+    style A fill:#e1f5fe
+    style Z fill:#c8e6c9
+    style D fill:#fff3e0
 ```
 
 **执行伪代码：**
@@ -825,133 +771,55 @@ GET_READY_TASKS(pending, completed):
             ready.append(task)
 
     RETURN ready
-```
-
-                        task.result = result
-                        shared_data[task.id] = result
-                        completed_tasks.append(task)
-                        del running_tasks[task.id]
-                    except Exception as e:
-                        task.status = "failed"
-                        task.result = str(e)
-                        completed_tasks.append(task)
-                        del running_tasks[task.id]
-
-            # 回调进度
-            if progress_callback:
-                progress_callback(completed_tasks, running_tasks)
-
-            # 移除已处理的任务
-            for task_id in [t.id for t in completed_tasks]:
-                if task_id in pending_tasks:
-                    del pending_tasks[task_id]
-
-        return completed_tasks, shared_data
-
-    def _get_ready_tasks(
-        self,
-        pending: dict[str, Task],
-        completed: list[Task]
-    ) -> list[Task]:
-        """获取依赖已满足的可执行任务"""
-        completed_ids = {t.id for t in completed}
-        ready = []
-
-        for task in pending.values():
-            if task.status != "pending":
-                continue
-            # 检查依赖是否都已完成
-            if all(dep_id in completed_ids for dep_id in task.depends_on):
-                ready.append(task)
-
-        return ready
-```
 
 #### 3.2.4 Verify Agent
 
+```mermaid
+flowchart TD
+    A[检查未完成任务] --> B[验证已完成任务质量]
+    B --> C[检查最终任务完成状态]
+    C --> D{所有任务已完成?}
+    D -->|是| E[is_complete = True<br/>流程结束]
+    D -->|否| F[missing_info 非空<br/>需要 Human-in-Loop]
+    
+    style E fill:#c8e6c9
+    style F fill:#fff3e0
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Verify Agent (进度验证)                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  verify(task_plan, completed_tasks, shared_data) → 结果        │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                      验证流程                            │   │
-│  │                                                          │   │
-│  │  1. 检查未完成任务                                       │   │
-│  │     completed_ids = {t.id FOR t IN completed_tasks}    │   │
-│  │     all_ids = {t.id FOR t IN task_plan.tasks}           │   │
-│  │     pending_ids = all_ids - completed_ids               │   │
-│  │                                                          │   │
-│  │  2. 验证已完成任务质量                                   │   │
-│  │     FOR task IN completed_tasks:                        │   │
-│  │         IF task.status == "failed":                    │   │
-│  │             missing_info.append(...)                     │   │
-│  │                                                          │   │
-│  │  3. 检查最终任务完成状态                                 │   │
-│  │     final_task = get(task_plan.final_task_id)           │   │
-│  │     IF final_task.status != "completed":               │   │
-│  │         missing_info.append(...)                         │   │
-│  │                                                          │   │
-│  │  4. 返回验证结果                                         │   │
-│  │     is_complete = (missing_info IS EMPTY)               │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    验证决策树                            │   │
-│  │                                                          │   │
-│  │         ┌─────────────────────┐                         │   │
-│  │         │  所有任务已完成?      │                         │   │
-│  │         └──────────┬──────────┘                         │   │
-│  │            Yes     │     No                              │   │
-│  │            ┌───────┴───────┐                            │   │
-│  │            ▼               ▼                             │   │
-│  │     ┌──────────┐   ┌────────────────┐                   │   │
-│  │     │ 全部完成 │   │ 有缺失信息      │                   │   │
-│  │     │流程结束  │   │ Human-in-Loop  │                   │   │
-│  │     └──────────┘   └────────────────┘                   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+
+**验证决策树：**
+
+```mermaid
+flowchart LR
+    A{所有任务已完成?} -->|Yes| B[全部完成<br/>流程结束]
+    A -->|No| C[有缺失信息<br/>Human-in-Loop]
+    
+    style B fill:#c8e6c9
+    style C fill:#fff3e0
 ```
 
 #### 3.2.5 Human-in-the-Loop
 
+```mermaid
+sequenceDiagram
+    participant System as 系统
+    participant User as 用户
+    
+    System->>User: 打印等待提示 (带超时倒计时)
+    System->>User: 等待用户输入
+    
+    alt 用户有输入
+        User-->>System: 提供信息
+        System->>System: 保存输入到 shared_data
+    else 超时
+        User--x System: (无响应)
+        System->>System: 返回 None
+    end
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                  Human-in-the-Loop (人工介入)                    │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  request_info(task_id, description, suggestions) → 用户输入     │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                      请求流程                             │   │
-│  │                                                          │   │
-│  │   ┌─────────────────┐                                     │   │
-│  │   │ 打印等待提示    │                                     │   │
-│  │   │ (带超时倒计时)  │                                     │   │
-│  │   └────────┬────────┘                                     │   │
-│  │            │                                               │   │
-│  │            ▼                                               │   │
-│  │   ┌─────────────────┐                                     │   │
-│  │   │ 等待用户输入    │                                     │   │
-│  │   │ (默认 60 秒)    │                                     │   │
-│  │   └────────┬────────┘                                     │   │
-│  │       │         │                                          │   │
-│  │   超时│    有输入│                                          │   │
-│  │       ▼         ▼                                          │   │
-│  │   ┌──────┐  ┌──────────┐                                  │   │
-│  │   │ None │  │ 保存输入 │                                  │   │
-│  │   └──────┘  └──────────┘                                  │   │
-│  │                                                          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  关键参数:                                                       │
-│  - timeout: 60 秒（默认）                                        │
-│  - threading.Event: 线程同步                                     │
-│  - threading.Lock: 线程安全                                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+**关键参数:**
+- timeout: 60 秒（默认）
+- threading.Event: 线程同步
+- threading.Lock: 线程安全
 
 #### 3.2.6 Sub Agents
 
@@ -971,28 +839,37 @@ GET_READY_TASKS(pending, completed):
 
 DeepEval 的核心是**指标 (Metric)** 和**测试用例 (Test Case)** 的分离：
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    DeepEval Framework                    │
-├─────────────────────────────────────────────────────────┤
-│  Test Case: {                                             │
-│    input: "Where is my order #A100?",                     │
-│    expected_intent: "order_status",                       │
-│    expected_tools: ["lookup_order"],                      │
-│    expected_human_review: false,                          │
-│    expected_response_contains: ["A100", "transit"]        │
-│  }                                                        │
-│                          │                                │
-│                          ▼                                │
-│  Metrics:                                                 │
-│  - IntentAccuracyMetric  (意图准确率)                     │
-│  - ToolSelectionMetric    (工具选择准确率)                │
-│  - HumanReviewDecisionMetric (人工审批决策准确率)         │
-│  - ResponseContainsMetric (回复关键词覆盖率)              │
-│                          │                                │
-│                          ▼                                │
-│  Score: 100% / 75% / 50% / 25% / 0%                       │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph TestCase["Test Case"]
+        TC1["input: 'Where is my order #A100?'"]
+        TC2["expected_intent: 'order_status'"]
+        TC3["expected_tools: ['lookup_order']"]
+        TC4["expected_human_review: false"]
+        TC5["expected_response_contains: ['A100', 'transit']"]
+    end
+    
+    subgraph Metrics["Metrics"]
+        M1["IntentAccuracyMetric"]
+        M2["ToolSelectionMetric"]
+        M3["HumanReviewDecisionMetric"]
+        M4["ResponseContainsMetric"]
+    end
+    
+    TC1 --> M1
+    TC2 --> M1
+    TC3 --> M2
+    TC4 --> M3
+    TC5 --> M4
+    
+    M1 --> Score["Score: 100% / 75% / 50% / 25% / 0%"]
+    M2 --> Score
+    M3 --> Score
+    M4 --> Score
+    
+    style TestCase fill:#e3f2fd
+    style Metrics fill:#fff3e0
+    style Score fill:#c8e6c9
 ```
 
 ### 4.2 自定义离线指标
@@ -1010,98 +887,66 @@ DeepEval 完整功能依赖 LLM 评分，本项目实现**确定性离线指标*
 
 #### 评分计算
 
-```
-评估流程:
-
-    测试用例 (golden_data)
-          │
-          ▼
-    ┌─────────────────────────────────────┐
-    │  逐项评估每个指标                   │
-    │                                     │
-    │  intent_result    = 评估意图       │
-    │  tools_result     = 评估工具选择    │
-    │  hr_result        = 评估审批决策    │
-    │  response_result  = 评估回复关键词  │
-    └─────────────────────────────────────┘
-          │
-          ▼
-    overall_score = sum(scores) / count
-          │
-          ▼
-    ┌─────────────────────────────────────┐
-    │  评分结果:                           │
-    │  100% - 全部通过                     │
-    │  75%  - 3/4 通过                     │
-    │  50%  - 2/4 通过                     │
-    │  25%  - 1/4 通过                     │
-    │  0%   - 全部失败                     │
-    └─────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["测试用例 (golden_data)"] --> B["逐项评估每个指标"]
+    
+    B --> B1["intent_result"]
+    B --> B2["tools_result"]
+    B --> B3["hr_result"]
+    B --> B4["response_result"]
+    
+    B1 --> C["overall_score = sum(scores) / count"]
+    B2 --> C
+    B3 --> C
+    B4 --> C
+    
+    C --> D{"评分结果"}
+    D -->|100%| E["全部通过"]
+    D -->|75%| F["3/4 通过"]
+    D -->|50%| G["2/4 通过"]
+    D -->|25%| H["1/4 通过"]
+    D -->|0%| I["全部失败"]
+    
+    style E fill:#c8e6c9
+    style F fill:#c8e6c9
 ```
 
 ### 4.3 Golden Dataset
 
 测试数据存储在 `tests/evals/customer_support_goldens.json`：
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Golden Dataset 结构                           │
-├─────────────────────────────────────────────────────────────────┤
-│  [                                                               │
-│    {                                                             │
-│      "id": "test_001",                                          │
-│      "input": "Hi, can you tell me the status of my order #A100?",│
-│      "expected_intent": "order_status",                          │
-│      "expected_tools": ["lookup_order"],                         │
-│      "expected_human_review": false,                            │
-│      "expected_response_contains": ["A100", "transit"],         │
-│      "category": "order_inquiry"                                 │
-│    },                                                            │
-│    {                                                             │
-│      "id": "test_002",                                          │
-│      "input": "I want to request a refund for order #B200",     │
-│      "expected_intent": "order_status",                         │
-│      "expected_tools": ["lookup_order", "create_refund_case"],  │
-│      "expected_human_review": true,                             │
-│      "expected_response_contains": ["B200", "refund"],         │
-│      "category": "refund_request"                               │
-│    },                                                            │
-│    ...                                                           │
-│  ]                                                              │
-└─────────────────────────────────────────────────────────────────┘
+```json
+{
+  "id": "test_001",
+  "input": "Hi, can you tell me the status of my order #A100?",
+  "expected_intent": "order_status",
+  "expected_tools": ["lookup_order"],
+  "expected_human_review": false,
+  "expected_response_contains": ["A100", "transit"],
+  "category": "order_inquiry"
+}
 ```
 
 ### 4.4 测试用例
 
-```
-测试执行流程:
-
-    FOR each test_case IN golden_data:
-        1. 执行 Agent
-           result = invoke_customer_agent(test_case.input)
-
-        2. 提取 Agent 状态
-           plan = result.state.plan
-
-        3. 评估指标
-           intent_ok     = (plan.intent == test_case.expected_intent)
-           tools_ok      = (test_case.expected_tools ⊆ plan.tools_to_use)
-           hr_ok         = (state.verify.requires_human == test_case.expected_human_review)
-           response_ok   = (关键词覆盖率 >= 70%)
-
-        4. 计算得分
-           score = (intent_ok + tools_ok + hr_ok + response_ok) / 4
-
-        5. 记录结果
-           results.append({
-               "id": test_case.id,
-               "score": score,
-               "passed": score >= 0.75
-           })
-
-    6. 输出汇总
-       PASSED = count(r.passed FOR r IN results)
-       print(f"Total: {len(results)}, Passed: {PASSED}")
+```mermaid
+flowchart LR
+    A["golden_data"] --> B["FOR each test_case"]
+    
+    B --> B1["1. 执行 Agent"]
+    B1 --> B2["2. 提取 Agent 状态"]
+    B2 --> B3["3. 评估指标"]
+    B3 --> B4["4. 计算得分"]
+    B4 --> B5["5. 记录结果"]
+    B5 --> B
+    
+    B3 --> C{"intent_ok + tools_ok + hr_ok + response_ok"}
+    C -->|≥75%| D["passed = true"]
+    C -->|<75%| E["passed = false"]
+    
+    style D fill:#c8e6c9
+    style E fill:#ffcdd2
 ```
 
 ---
