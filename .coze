@@ -1,0 +1,11 @@
+[project]
+sub_id = "150982cb"
+name = "offline-pev-customer-agent"
+requires = ["python-3.10"]
+project_type = "backend"
+
+[preview]
+preview_enable = "disabled"
+
+[subprojects]
+path = ["."]
