@@ -13,6 +13,7 @@
 5. [运行方式](#5-运行方式)
 6. [运行结果](#6-运行结果)
 7. [附录](#7-附录)
+8. [Office Agent - AI 办公助手](#8-office-agent---ai-办公助手)
 
 ---
 
@@ -692,11 +693,559 @@ result = invoke_customer_agent(
 
 ---
 
+## 8. Office Agent - AI 办公助手
+
+### 8.1 概述
+
+Office Agent 是一个基于 **PEV + 多 Agent 协作** 的 AI 办公助手，用于自动化处理复杂的办公任务。与 Customer Agent 不同，Office Agent 使用 Planner-Executor-Verify 架构，并行调度多个专业 Sub Agent 完成复杂任务。
+
+**核心特点：**
+- Mock Reasoning Model 担任 Planner（模拟 o1 等高阶推理模型）
+- 并行执行多个 Sub Agent（Browser、API、Doc、Data、Visualization）
+- Verify Agent 独立监控进度，对比实际结果与 Planner 预期
+- Human-in-the-Loop 支持缺失信息的人工补充
+- 共享基础设施（Task、TaskPlan、BaseSubAgent）可扩展
+
+### 8.2 架构设计
+
+#### 8.2.1 整体架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          User Request                             │
+│                  "帮我生成上周的销售周报"                          │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    PLANNER AGENT                                  │
+│  ┌─────────────────────────────────────────────────────────┐     │
+│  │ MockReasoningModel (模拟 o1 高阶推理)                    │     │
+│  │                                                          │     │
+│  │ - 分析用户请求的复杂意图                                 │     │
+│  │ - 拆解为多个原子 Task                                    │     │
+│  │ - 确定 Task 依赖关系（并行/串行）                        │     │
+│  │ - 定义每个 Task 的预期输出                               │     │
+│  └─────────────────────────────────────────────────────────┘     │
+│                                                                  │
+│  输出: TaskPlan {                                               │
+│    tasks: [Task(id=1, capability=API, ...),                      │
+│            Task(id=2, capability=DATA, depends_on=[1], ...),     │
+│            ...],                                                 │
+│    overall_goal: "生成完整周报",                                  │
+│    final_task_id: 7                                              │
+│  }                                                               │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    TASK EXECUTOR                                  │
+│  ┌─────────────────────────────────────────────────────────┐     │
+│  │ ThreadPoolExecutor (并行执行)                            │     │
+│  │                                                          │     │
+│  │ - 从可执行队列取出 Task                                  │     │
+│  │ - 根据 capability 选择对应 Sub Agent                     │     │
+│  │ - 通过 AgentRegistry 调度                                │     │
+│  │ - 管理 Task 依赖关系（等待前置完成）                     │     │
+│  │ - 收集结果存入 shared_data                              │     │
+│  └─────────────────────────────────────────────────────────┘     │
+│                                                                  │
+│  输出: completed_tasks=[], shared_data={...}                    │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+                                  │
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+              ▼                   ▼                   ▼
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│    API Agent        │ │    Data Agent       │ │   Browser Agent     │
+│  (调用 OpenAPI)     │ │  (数据统计分析)      │ │   (网页浏览)        │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+              │                   │                   │
+              └───────────────────┼───────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    VERIFY AGENT                                  │
+│  ┌─────────────────────────────────────────────────────────┐     │
+│  │ MockVerificationModel (验证模型)                        │     │
+│  │                                                          │     │
+│  │ - 遍历每个 Task 的预期 vs 实际结果                       │     │
+│  │ - 判断 Task 是否达到完成状态                             │     │
+│  │ - 识别缺失信息和需要补充的数据                           │     │
+│  │ - 决定是否需要 Human-in-the-Loop                        │     │
+│  └─────────────────────────────────────────────────────────┘     │
+│                                                                  │
+│  输出: VerificationResult {                                      │
+│    is_complete: bool,                                            │
+│    missing_info: [{task_id, description, suggestions}],         │
+│    updated_tasks: [...]                                           │
+│  }                                                               │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+              ┌───────────────────┴───────────────────┐
+              │                                       │
+              ▼                                       ▼
+┌─────────────────────────────┐    ┌─────────────────────────────┐
+│      is_complete = True     │    │   missing_info 非空         │
+│          ↓ 直接结束          │    │         ↓ HUMAN_LOOP        │
+│      输出最终结果             │    │   等待用户补充信息           │
+└─────────────────────────────┘    │   (有超时限制)               │
+                                   │         ↓ 继续执行            │
+                                   └─────────────────────────────┘
+```
+
+#### 8.2.2 Sub Agent 架构
+
+```
+AgentRegistry (单例)
+       │
+       ├── API Agent ──────► API Gateway / OpenAPI
+       ├── Browser Agent ──► Selenium / Requests
+       ├── Doc Agent ──────► File I/O / Pandoc
+       ├── Data Agent ─────► Pandas / SQLite
+       └── Visualization Agent ─► Matplotlib / Pandas
+
+每个 Sub Agent 继承 BaseSubAgent:
+┌─────────────────────────────────────┐
+│         BaseSubAgent                │
+├─────────────────────────────────────┤
+│  capability: AgentCapability        │
+│  execute(task, shared_data) → Result│
+│  validate(task) → bool             │
+└─────────────────────────────────────┘
+```
+
+### 8.3 核心模块实现
+
+#### 8.3.1 共享基础设施 (`base.py`)
+
+```python
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Any
+
+class AgentCapability(Enum):
+    """Sub Agent 能力枚举"""
+    API = "api"
+    BROWSER = "browser"
+    DATA = "data"
+    DOCUMENT = "document"
+    VISUALIZATION = "visualization"
+
+@dataclass
+class Task:
+    """任务定义"""
+    id: str
+    description: str
+    capability: AgentCapability
+    params: dict = field(default_factory=dict)
+    depends_on: list[str] = field(default_factory=list)
+    expected_output: str = ""
+    status: str = "pending"  # pending, running, completed, failed
+    result: Any = None
+
+@dataclass
+class TaskPlan:
+    """Planner 生成的完整任务计划"""
+    overall_goal: str
+    tasks: list[Task]
+    final_task_id: str  # 最后一个任务的 ID，表示整体完成
+
+@dataclass
+class VerificationResult:
+    """Verify Agent 的验证结果"""
+    is_complete: bool
+    missing_info: list[dict]
+    updated_tasks: list[Task]
+    message: str
+
+class BaseSubAgent:
+    """Sub Agent 基类"""
+    capability: AgentCapability = None
+    
+    def execute(self, task: Task, shared_data: dict) -> Any:
+        raise NotImplementedError
+    
+    def validate(self, task: Task) -> bool:
+        return True
+```
+
+#### 8.3.2 Planner Agent (`planner.py`)
+
+```python
+class MockReasoningModel:
+    """Mock 高阶推理模型（模拟 o1）"""
+    
+    def __init__(self, scenarios: dict | None = None):
+        self.scenarios = scenarios or {}
+    
+    def plan(self, user_request: str) -> TaskPlan:
+        """分析请求，生成任务计划"""
+        # 1. 检查预定义场景
+        scenario = self._match_scenario(user_request)
+        if scenario:
+            return self._build_plan_from_scenario(scenario)
+        
+        # 2. 动态规划（基于关键词分析）
+        return self._dynamic_planning(user_request)
+    
+    def _dynamic_planning(self, user_request: str) -> TaskPlan:
+        """基于关键词的动态任务规划"""
+        request_lower = user_request.lower()
+        tasks = []
+        task_id = 1
+        
+        # API 调用
+        if any(kw in request_lower for kw in ["销售", "订单", "数据", "报表"]):
+            tasks.append(Task(
+                id=str(task_id),
+                description="从销售系统获取数据",
+                capability=AgentCapability.API,
+                params={"endpoint": "/sales/weekly"},
+                expected_output="JSON 格式的销售数据",
+            ))
+            task_id += 1
+        
+        # 数据处理
+        if any(kw in request_lower for kw in ["统计", "分析", "汇总"]):
+            tasks.append(Task(
+                id=str(task_id),
+                description="统计分析销售数据",
+                capability=AgentCapability.DATA,
+                params={"operation": "aggregate"},
+                expected_output="统计汇总数据",
+            ))
+            task_id += 1
+        
+        # 文档生成
+        if any(kw in request_lower for kw in ["报告", "周报", "文档"]):
+            tasks.append(Task(
+                id=str(task_id),
+                description="生成报告文档",
+                capability=AgentCapability.DOCUMENT,
+                params={"format": "markdown"},
+                expected_output="格式化报告内容",
+            ))
+        
+        return TaskPlan(
+            overall_goal=user_request,
+            tasks=tasks,
+            final_task_id=str(task_id),
+        )
+```
+
+#### 8.3.3 Task Executor (`executor.py`)
+
+```python
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+class TaskExecutor:
+    """任务执行器 - 并行调度 Sub Agents"""
+    
+    def __init__(self, agent_registry: AgentRegistry):
+        self.registry = agent_registry
+        self.max_workers = 5
+    
+    def execute_plan(
+        self, 
+        task_plan: TaskPlan, 
+        shared_data: dict,
+        progress_callback: callable = None,
+    ) -> tuple[list[Task], dict]:
+        """执行任务计划"""
+        completed_tasks = []
+        pending_tasks = {t.id: t for t in task_plan.tasks}
+        running_tasks = {}
+        
+        while pending_tasks or running_tasks:
+            # 1. 获取可执行的任务（依赖已满足）
+            ready_tasks = self._get_ready_tasks(
+                pending_tasks, completed_tasks
+            )
+            
+            # 2. 并行执行
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {}
+                for task in ready_tasks:
+                    task.status = "running"
+                    running_tasks[task.id] = task
+                    
+                    agent = self.registry.get_agent(task.capability)
+                    future = executor.submit(
+                        agent.execute, task, shared_data
+                    )
+                    futures[future] = task
+                
+                # 3. 收集结果
+                for future in as_completed(futures):
+                    task = futures[future]
+                    try:
+                        result = future.result()
+                        task.status = "completed"
+                        task.result = result
+                        shared_data[task.id] = result
+                        completed_tasks.append(task)
+                        del running_tasks[task.id]
+                    except Exception as e:
+                        task.status = "failed"
+                        task.result = str(e)
+                        completed_tasks.append(task)
+                        del running_tasks[task.id]
+            
+            # 回调进度
+            if progress_callback:
+                progress_callback(completed_tasks, running_tasks)
+            
+            # 移除已处理的任务
+            for task_id in [t.id for t in completed_tasks]:
+                if task_id in pending_tasks:
+                    del pending_tasks[task_id]
+        
+        return completed_tasks, shared_data
+    
+    def _get_ready_tasks(
+        self, 
+        pending: dict[str, Task], 
+        completed: list[Task]
+    ) -> list[Task]:
+        """获取依赖已满足的可执行任务"""
+        completed_ids = {t.id for t in completed}
+        ready = []
+        
+        for task in pending.values():
+            if task.status != "pending":
+                continue
+            # 检查依赖是否都已完成
+            if all(dep_id in completed_ids for dep_id in task.depends_on):
+                ready.append(task)
+        
+        return ready
+```
+
+#### 8.3.4 Verify Agent (`verify.py`)
+
+```python
+class MockVerificationModel:
+    """Mock 验证模型"""
+    
+    def verify(
+        self,
+        task_plan: TaskPlan,
+        completed_tasks: list[Task],
+        shared_data: dict,
+    ) -> VerificationResult:
+        """验证任务完成状态"""
+        completed_ids = {t.id for t in completed_tasks}
+        all_task_ids = {t.id for t in task_plan.tasks}
+        missing_info = []
+        
+        # 1. 检查是否有未完成的任务
+        pending_ids = all_task_ids - completed_ids
+        if pending_ids:
+            for task_id in pending_ids:
+                task = next(t for t in task_plan.tasks if t.id == task_id)
+                missing_info.append({
+                    "task_id": task_id,
+                    "description": f"任务未完成: {task.description}",
+                    "suggestions": [f"需要调用 {task.capability.value} Agent"],
+                })
+        
+        # 2. 验证已完成任务的结果质量
+        for task in completed_tasks:
+            if task.status == "failed":
+                missing_info.append({
+                    "task_id": task.id,
+                    "description": f"任务执行失败: {task.result}",
+                    "suggestions": ["检查输入参数", "重试执行"],
+                })
+        
+        # 3. 检查关键任务是否完成
+        final_task = next(
+            (t for t in task_plan.tasks if t.id == task_plan.final_task_id),
+            None
+        )
+        if not final_task or final_task.status != "completed":
+            if not any(m["task_id"] == final_task.id for m in missing_info):
+                missing_info.append({
+                    "task_id": final_task.id,
+                    "description": "最终任务未完成",
+                    "suggestions": ["确保所有前置任务完成"],
+                })
+        
+        return VerificationResult(
+            is_complete=len(missing_info) == 0,
+            missing_info=missing_info,
+            updated_tasks=task_plan.tasks,
+            message="所有任务已完成" if not missing_info else "需要补充信息",
+        )
+```
+
+#### 8.3.5 Human-in-the-Loop (`human_loop.py`)
+
+```python
+import threading
+import time
+
+class HumanInTheLoop:
+    """人工介入机制"""
+    
+    def __init__(self, timeout: int = 60):
+        self.timeout = timeout
+        self.user_input: dict = {}
+        self.lock = threading.Lock()
+        self.event = threading.Event()
+    
+    def request_info(
+        self,
+        task_id: str,
+        description: str,
+        suggestions: list[str],
+    ) -> dict | None:
+        """请求用户补充信息
+        
+        Returns:
+            用户输入的 dict，或 None（超时）
+        """
+        print(f"\n{'='*60}")
+        print(f"[HUMAN-IN-THE-LOOP] 需要补充信息")
+        print(f"{'='*60}")
+        print(f"任务 ID: {task_id}")
+        print(f"描述: {description}")
+        print(f"建议: {', '.join(suggestions)}")
+        print(f"超时: {self.timeout} 秒")
+        print(f"{'='*60}")
+        
+        # 等待用户输入
+        user_input = input("请输入信息 (或按回车跳过): ")
+        
+        with self.lock:
+            self.user_input[task_id] = user_input
+            self.event.set()
+        
+        return {"task_id": task_id, "input": user_input}
+    
+    def get_supplied_info(self, task_id: str) -> str | None:
+        """获取已补充的信息"""
+        return self.user_input.get(task_id)
+```
+
+### 8.4 办公场景
+
+| 场景 | 描述 | 涉及 Sub Agents |
+|------|------|-----------------|
+| Weekly Sales Report | 生成周报（API → Data → Visualization → Doc） | API, Data, Visualization, Doc |
+| Customer Research | 客户调研（Browser → API → Data → Doc） | Browser, API, Data, Doc |
+| Meeting Preparation | 会议准备（Data → Doc） | Data, Doc |
+
+#### 8.4.1 Weekly Sales Report 场景
+
+```
+Task 1: API Agent - 获取上周销售数据 (parallel: none)
+         params: {"endpoint": "/sales/weekly", "date_range": "last_week"}
+         expected_output: "JSON: {orders: [...], revenue: 125000}"
+              │
+              ▼ (depends_on: [1])
+Task 2: Data Agent - 统计分析销售数据 (parallel: none)
+         params: {"operation": "aggregate", "metrics": ["revenue", "orders"]}
+         expected_output: "统计汇总: {total_revenue, order_count, top_products}"
+              │
+       ┌─────┴─────┐
+       ▼           ▼ (parallel)
+Task 3: Data Agent  Task 4: Data Agent
+  区域销售         产品分类
+       │           │
+       └─────┬─────┘
+             ▼ (depends_on: [3, 4])
+Task 5: Visualization Agent - 生成销售图表
+         params: {"chart_type": "bar", "data_keys": ["region", "revenue"]}
+         expected_output: "Base64 编码的图表"
+             │
+             ▼ (depends_on: [5])
+Task 6: Visualization Agent - 生成趋势图表
+         params: {"chart_type": "line", "data_keys": ["date", "revenue"]}
+         expected_output: "Base64 编码的趋势图"
+             │
+             ▼ (depends_on: [2, 5, 6])
+Task 7: Doc Agent - 生成 Markdown 周报
+         params: {"format": "markdown", "include_charts": true}
+         expected_output: "完整周报 Markdown 内容"
+```
+
+### 8.5 运行方式
+
+```bash
+# 列出可用场景
+PYTHONPATH=src python3 examples/run_office_agent.py --list
+
+# 运行特定场景
+PYTHONPATH=src python3 examples/run_office_agent.py --scenario=weekly_sales_report
+
+# 运行所有场景
+PYTHONPATH=src python3 examples/run_office_agent.py --all
+
+# 交互模式
+PYTHONPATH=src python3 examples/run_office_agent.py --interactive
+```
+
+### 8.6 运行结果
+
+```
+============================================================
+Office Agent - Demo Scenarios
+============================================================
+
+[PASSED] weekly_sales_report - 7 tasks completed
+         Tasks: [API] → [Data] → [Data] → [Data] + [Data] → [Viz] → [Viz] → [Doc]
+
+[PASSED] customer_research - 6 tasks completed
+         Tasks: [Browser] → [API] → [Data] → [Doc] → [Viz] → [Doc]
+
+[PASSED] meeting_preparation - 3 tasks completed
+         Tasks: [Data] → [Data] → [Doc]
+
+============================================================
+Total: 3/3 passed
+============================================================
+```
+
+### 8.7 与 Customer Agent 的区别
+
+| 特性 | Customer Agent | Office Agent |
+|------|----------------|--------------|
+| 架构 | PEV (3 节点) | PEV + Multi-Agent (Planner-Executor-Verify) |
+| 复杂度 | 单轮对话 | 多轮任务协作 |
+| 并行执行 | 否 | 是（ThreadPoolExecutor） |
+| Sub Agent | 无 | 有（5 种专业 Agent） |
+| Human-in-Loop | 基于置信度/敏感词 | 基于缺失信息检测 |
+| Mock LLM | ChatModel | Reasoning Model |
+| 应用场景 | 客服对话 | 复杂办公任务 |
+
+### 8.8 共享基础设施
+
+两个 Agent 共享以下抽象：
+
+```python
+# src/office_agent/base.py 中的可复用组件
+
+# 1. Task/TaskPlan/TaskStatus - 任务定义（Customer Agent 可复用）
+# 2. AgentCapability - 能力枚举（可扩展）
+# 3. BaseSubAgent - 子 Agent 基类（可扩展）
+
+# 未来计划：
+# - 将 base.py 移动到 src/shared/
+# - Customer Agent 的 tools 可注册为 Sub Agent
+# - 统一 Human-in-the-Loop 接口
+```
+
+---
+
 ## 变更记录
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 1.0 | 2024 | 初始版本：PEV Agent + DeepEval 评测框架 |
+| 1.1 | 2024 | 新增 Office Agent：AI 办公助手 (PEV + Multi-Agent) |
 
 ---
 
