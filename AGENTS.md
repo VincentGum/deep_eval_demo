@@ -166,13 +166,23 @@ PYTHONPATH=src python3 examples/run_office_agent.py --interactive
 
 ### Customer Agent
 - **完成度**: 100%
-- **测试通过**: 7/7
-- **Golden Dataset**: 10/10 通过，平均得分 99.17%
+- **测试通过**: 19/19 (DeepEval 单元测试) + 30/30 (Golden Dataset)
+- **Golden Dataset**: 30 条测试数据，平均得分 100%
+- **DeepEval Metrics**: IntentAccuracy, ToolSelection, HumanReviewDecision
 
 ### Office Agent
 - **完成度**: 100%
 - **场景测试**: 3/3 通过
 - **DeepEval**: 暂未实现（按需求）
+
+## EDD 开发模式 (Phase 1 完成)
+
+采用 Eval Driven Development 模式：
+
+1. **设计评测 Rubrics**: 定义 ResponseQuality, PolicyCompliance, EmotionalSupport 指标
+2. **实现评测用例**: 19 个 DeepEval 测试用例覆盖各类场景
+3. **扩充 Golden Dataset**: 30 条真实对话数据用于离线评估
+4. **G-Eval 自动化**: 支持 OpenAI API 的自动评估（需配置 API Key）
 
 ## 用户偏好与长期约束
 

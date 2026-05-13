@@ -434,7 +434,17 @@ class IntentReasoner:
                     )
                     return Intent.ORDER_STATUS, 0.75, "\n".join(reasoning_parts)
 
-        # Step 4: Check for problem indicators
+        # Step 4: Check for product inquiry (not order-related)
+        product_indicators = ["product id", "do you have", "in stock", "color", "size", "item #", "item id"]
+        if any(ind in text.lower() for ind in product_indicators):
+            if not features.has_order_reference and not features.has_action_verb:
+                reasoning_parts.append(
+                    f"Product inquiry indicators detected but no order reference. "
+                    f"Classifying as OFF_TOPIC intent (not order-related)."
+                )
+                return Intent.OFF_TOPIC, 0.85, "\n".join(reasoning_parts)
+
+        # Step 5: Check for problem indicators
         if features.has_negative_emotion:
             reasoning_parts.append(
                 f"Negative emotion detected. "

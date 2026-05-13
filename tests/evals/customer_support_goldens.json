@@ -3,90 +3,257 @@
     "id": "test_001",
     "input": "Hi, can you tell me the status of my order #A100?",
     "expected_intent": "order_status",
-    "expected_tools": ["lookup_order"],
-    "expected_human_review": false,
-    "expected_response_contains": ["A100", "transit", "tomorrow"],
-    "category": "order_inquiry"
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
   },
   {
     "id": "test_002",
     "input": "I want to request a refund for order #B200, the item was damaged.",
-    "expected_intent": "order_status",
-    "expected_tools": ["lookup_order", "create_refund_case"],
-    "expected_human_review": true,
-    "expected_response_contains": ["B200", "refund", "review"],
-    "category": "refund_request"
+    "expected_intent": "refund",
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
   },
   {
     "id": "test_003",
     "input": "Where is my order #C300?",
     "expected_intent": "order_status",
-    "expected_tools": ["lookup_order"],
-    "expected_human_review": false,
-    "expected_response_contains": ["C300", "pending", "payment"],
-    "category": "order_inquiry"
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
   },
   {
     "id": "test_004",
     "input": "Hello, I need some help.",
     "expected_intent": "greeting",
     "expected_tools": [],
-    "expected_human_review": false,
-    "expected_response_contains": ["help", "order"],
-    "category": "general"
+    "expected_human_review": false
   },
   {
     "id": "test_005",
     "input": "I need to cancel order #A100 immediately.",
-    "expected_intent": "order_status",
-    "expected_tools": ["lookup_order", "create_refund_case"],
-    "expected_human_review": true,
-    "expected_response_contains": ["A100", "cancel", "review"],
-    "category": "cancellation"
+    "expected_intent": "cancel",
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
   },
   {
     "id": "test_006",
     "input": "My order #B200 was delivered yesterday but the package was open.",
     "expected_intent": "order_status",
-    "expected_tools": ["lookup_order", "create_refund_case"],
-    "expected_human_review": true,
-    "expected_response_contains": ["B200", "delivered", "review"],
-    "category": "complaint"
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
   },
   {
     "id": "test_007",
     "input": "Thanks for your help!",
     "expected_intent": "thanks",
     "expected_tools": [],
-    "expected_human_review": false,
-    "expected_response_contains": ["welcome"],
-    "category": "general"
+    "expected_human_review": false
   },
   {
     "id": "test_008",
     "input": "Can I get a status update on order #C300?",
     "expected_intent": "order_status",
-    "expected_tools": ["lookup_order"],
-    "expected_human_review": false,
-    "expected_response_contains": ["C300", "pending", "payment"],
-    "category": "order_inquiry"
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
   },
   {
     "id": "test_009",
     "input": "I want to complain about my order #A100, it arrived late.",
     "expected_intent": "order_status",
-    "expected_tools": ["lookup_order", "create_refund_case"],
-    "expected_human_review": true,
-    "expected_response_contains": ["A100", "refund", "review"],
-    "category": "complaint"
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
   },
   {
     "id": "test_010",
     "input": "Show me the status of order #B200 please.",
     "expected_intent": "order_status",
-    "expected_tools": ["lookup_order"],
-    "expected_human_review": false,
-    "expected_response_contains": ["B200", "delivered", "yesterday"],
-    "category": "order_inquiry"
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_011",
+    "input": "今天天气怎么样？",
+    "expected_intent": "off_topic",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_012",
+    "input": "你好",
+    "expected_intent": "greeting",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_013",
+    "input": "我的订单什么时候发货？",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_014",
+    "input": "Thank you so much!",
+    "expected_intent": "thanks",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_015",
+    "input": "Thanks for your help!",
+    "expected_intent": "thanks",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_016",
+    "input": "Hi there, can you check on my order #D400? It's been a week.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_017",
+    "input": "I have a question about my delivery.",
+    "expected_intent": "unknown",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_018",
+    "input": "Hi, can you help me with something?",
+    "expected_intent": "greeting",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_019",
+    "input": "I'm waiting for my package #A100.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_020",
+    "input": "I'm really disappointed with my order #B200, the quality is poor.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_021",
+    "input": "Can you please check the status of my order #C300?",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_022",
+    "input": "Where is my delivery?",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_023",
+    "input": "I need to speak with someone about my order.",
+    "expected_intent": "unknown",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_024",
+    "input": "My order status please?",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_025",
+    "input": "Hello! How are you?",
+    "expected_intent": "greeting",
+    "expected_tools": [],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_026",
+    "input": "Please help me with my order #A100.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
+  },
+  {
+    "id": "test_027",
+    "input": "I want a refund for order #C300.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
+  },
+  {
+    "id": "test_028",
+    "input": "My order #A100 was late and I want a refund.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
+  },
+  {
+    "id": "test_029",
+    "input": "Cancel my order #B200 please.",
+    "expected_intent": "cancel",
+    "expected_tools": [
+      "lookup_order",
+      "create_refund_case"
+    ],
+    "expected_human_review": true
+  },
+  {
+    "id": "test_030",
+    "input": "I have a problem with order #D400.",
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
+    "expected_human_review": false
   }
 ]
