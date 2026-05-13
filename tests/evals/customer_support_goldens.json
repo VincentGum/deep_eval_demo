@@ -1,0 +1,92 @@
+[
+  {
+    "id": "test_001",
+    "input": "Hi, can you tell me the status of my order #A100?",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order"],
+    "expected_human_review": false,
+    "expected_response_contains": ["A100", "transit", "tomorrow"],
+    "category": "order_inquiry"
+  },
+  {
+    "id": "test_002",
+    "input": "I want to request a refund for order #B200, the item was damaged.",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order", "create_refund_case"],
+    "expected_human_review": true,
+    "expected_response_contains": ["B200", "refund", "review"],
+    "category": "refund_request"
+  },
+  {
+    "id": "test_003",
+    "input": "Where is my order #C300?",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order"],
+    "expected_human_review": false,
+    "expected_response_contains": ["C300", "pending", "payment"],
+    "category": "order_inquiry"
+  },
+  {
+    "id": "test_004",
+    "input": "Hello, I need some help.",
+    "expected_intent": "greeting",
+    "expected_tools": [],
+    "expected_human_review": false,
+    "expected_response_contains": ["help", "order"],
+    "category": "general"
+  },
+  {
+    "id": "test_005",
+    "input": "I need to cancel order #A100 immediately.",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order", "create_refund_case"],
+    "expected_human_review": true,
+    "expected_response_contains": ["A100", "cancel", "review"],
+    "category": "cancellation"
+  },
+  {
+    "id": "test_006",
+    "input": "My order #B200 was delivered yesterday but the package was open.",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order", "create_refund_case"],
+    "expected_human_review": true,
+    "expected_response_contains": ["B200", "delivered", "review"],
+    "category": "complaint"
+  },
+  {
+    "id": "test_007",
+    "input": "Thanks for your help!",
+    "expected_intent": "thanks",
+    "expected_tools": [],
+    "expected_human_review": false,
+    "expected_response_contains": ["welcome"],
+    "category": "general"
+  },
+  {
+    "id": "test_008",
+    "input": "Can I get a status update on order #C300?",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order"],
+    "expected_human_review": false,
+    "expected_response_contains": ["C300", "pending", "payment"],
+    "category": "order_inquiry"
+  },
+  {
+    "id": "test_009",
+    "input": "I want to complain about my order #A100, it arrived late.",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order", "create_refund_case"],
+    "expected_human_review": true,
+    "expected_response_contains": ["A100", "refund", "review"],
+    "category": "complaint"
+  },
+  {
+    "id": "test_010",
+    "input": "Show me the status of order #B200 please.",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order"],
+    "expected_human_review": false,
+    "expected_response_contains": ["B200", "delivered", "yesterday"],
+    "category": "order_inquiry"
+  }
+]
