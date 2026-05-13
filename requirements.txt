@@ -1,0 +1,4 @@
+deepeval==4.0.0
+langchain>=0.3,<0.4
+langgraph>=0.2,<0.3
+pytest>=9.0
