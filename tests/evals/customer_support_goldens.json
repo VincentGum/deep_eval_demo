@@ -1,0 +1,23 @@
+[
+  {
+    "input": "Where is order A100?",
+    "expected_intent": "order_status",
+    "expected_tools": ["lookup_order"],
+    "requires_human": false,
+    "must_include": ["delivery", "update"]
+  },
+  {
+    "input": "I want a refund for order B200 because it arrived damaged.",
+    "expected_intent": "refund_request",
+    "expected_tools": ["lookup_order", "create_refund_case"],
+    "requires_human": true,
+    "must_include": ["Human approval recorded"]
+  },
+  {
+    "input": "Can you help me with my account?",
+    "expected_intent": "general_support",
+    "expected_tools": [],
+    "requires_human": true,
+    "must_include": ["support specialist"]
+  }
+]
