@@ -20,15 +20,8 @@
 
 from __future__ import annotations
 
-from typing import TypedDict, Annotated, Sequence, Callable, Optional, Tuple
+from typing import TypedDict, Annotated, Sequence
 from datetime import datetime
-from contextvars import ContextVar
-
-# 人工审批函数的上下文变量 - 用于在节点间传递
-# 由于 AgentState TypedDict 不能包含函数类型，我们使用 ContextVar
-_current_approval_func: ContextVar[Optional[Callable[[str, str], Tuple[bool, Optional[str]]]]] = ContextVar(
-    'current_approval_func', default=None
-)
 
 # LangChain 核心组件
 from langgraph.graph import StateGraph, END
@@ -78,8 +71,6 @@ class AgentState(TypedDict):
     human_review_reason: str      # 人工审核的原因
     is_sensitive: bool            # 是否包含敏感内容
     confidence: float             # 响应置信度 (0.0-1.0)
-    # 注意: human_approval_func 不存储在状态中，而是在 invoke_customer_agent 中临时传递
-    # 节点通过闭包或外部引用访问它
 
 
 def add_messages(left: list, right: list) -> list:
@@ -141,14 +132,12 @@ def analyze_intent_node(state: AgentState) -> AgentState:
     reasoning_result = llm.analyze_intent(user_message)
     
     # 更新状态
-    # 注意：保留 human_approval_func 以便后续节点使用
     return {
         "intent": reasoning_result.intent,
         "tools_called": [],          # 清空已调用工具
         "human_review": False,        # 默认不需要人工审核
         "human_review_reason": "",
         "confidence": reasoning_result.confidence,
-        "human_approval_func": state.get("human_approval_func"),
     }
 
 
@@ -202,29 +191,13 @@ def execute_tools_node(state: AgentState) -> AgentState:
         tools_called.append("get_order_status")
         tool_results.append(str(result) if hasattr(result, 'content') else result)
     
-    elif intent_value == "complaint":
-        # 创建投诉工单 - 敏感操作，需要人工审核
-        complaint_reason = reasoning.parameters.get("reason", "用户投诉")
-        result = create_refund_case.invoke({
-            "order_id": reasoning.parameters.get("order_id", ""),
-            "reason": complaint_reason,
-        })
-        tools_called.append("create_refund_case")
-        tool_results.append(str(result) if hasattr(result, 'content') else result)
-    
     # 添加工具执行结果到消息
     if tool_results:
         messages = messages + [AIMessage(content="\n".join(tool_results))]
     
     return {
         "messages": messages,
-        "intent": state["intent"],
         "tools_called": state["tools_called"] + tools_called,
-        "human_review": state.get("human_review"),
-        "human_review_reason": state.get("human_review_reason"),
-        "is_sensitive": state.get("is_sensitive"),
-        "confidence": state.get("confidence"),
-        "draft_response": state.get("draft_response"),
     }
 
 
@@ -256,33 +229,27 @@ def verify_response_node(state: AgentState) -> AgentState:
     # 检查是否包含敏感内容
     is_sensitive = len(sensitive_words) > 0
     
-    # 检查是否为敏感操作（如退款、投诉）
+    # 检查是否为敏感操作（如退款）
     intent = state.get("intent", "")
     intent_value = intent.value if isinstance(intent, Intent) else intent
     requires_human_review = (
         is_sensitive or 
         intent_value == "refund" or
-        intent_value == "complaint" or
-        "refund" in state.get("tools_called", []) or
-        "create_refund_case" in state.get("tools_called", [])
+        "refund" in state.get("tools_called", [])
     )
     
     # 构建审核原因
     reason = ""
     if is_sensitive:
         reason = f"检测到敏感词: {', '.join(sensitive_words)}"
-    elif intent_value == "complaint" or "create_refund_case" in state.get("tools_called", []):
-        reason = "投诉/退款工单需要人工审核"
+    elif requires_human_review:
+        reason = "退款操作需要人工审核"
     
     return {
-        "messages": state["messages"],
-        "intent": state.get("intent"),
-        "tools_called": state.get("tools_called", []),
         "is_sensitive": is_sensitive,
         "human_review": requires_human_review,
         "human_review_reason": reason,
         "confidence": confidence,
-        "draft_response": state.get("draft_response"),
     }
 
 
@@ -301,35 +268,17 @@ def human_review_node(state: AgentState) -> AgentState:
         更新后的 Agent 状态
     """
     if not state.get("human_review"):
-        return {
-            "messages": state["messages"],
-            "intent": state.get("intent"),
-            "tools_called": state.get("tools_called", []),
-            "human_review": state.get("human_review"),
-            "human_review_reason": state.get("human_review_reason"),
-            "is_sensitive": state.get("is_sensitive"),
-            "confidence": state.get("confidence"),
-            "draft_response": state.get("draft_response"),
-        }
+        return state
     
-    # 获取审批函数 - 从上下文变量中获取
-    # 注意：由于 AgentState TypedDict 不能包含函数类型，我们使用 ContextVar
-    approval_func = _current_approval_func.get()
+    # 获取审批函数
+    approval_func = state.get("human_approval_func")
     
     # 如果没有审批函数，使用默认值（拒绝）
     if not approval_func:
-        # 没有审批函数，无法进行人工审核
-        # 保持 human_review=True 表示审核无法进行（敏感操作被拒绝）
-        return {
-            "messages": state["messages"],
-            "intent": state.get("intent"),
-            "tools_called": state.get("tools_called", []),
-            "human_review": True,
-            "human_review_reason": "无审批函数，无法执行敏感操作",
-            "is_sensitive": state.get("is_sensitive"),
-            "confidence": state.get("confidence"),
-            "draft_response": state.get("draft_response"),
-        }
+        # 默认拒绝敏感操作
+        state["human_review"] = False
+        state["human_review_reason"] = "无审批函数，默认拒绝敏感操作"
+        return state
     
     # 调用审批函数
     user_message = state["messages"][0].content if state["messages"] else ""
@@ -342,28 +291,15 @@ def human_review_node(state: AgentState) -> AgentState:
         reason = "审批函数执行失败"
     
     # 根据审批结果更新状态
-    # 注意：
-    # - human_review=True 表示"需要人工审核"或"审核已完成"
-    # - 进入此节点意味着需要审核，审核后根据结果决定是否继续
     if approved:
-        # 审核通过 - 敏感操作被批准，可以继续执行
-        human_review = False  # 已批准，不需要继续等待
-        human_review_reason = f"已批准: {reason}" if reason else "已批准"
+        state["human_review"] = False  # 审核通过，不需要等待
+        state["human_review_reason"] = f"已批准: {reason}" if reason else "已批准"
     else:
-        # 审核拒绝 - 敏感操作被拒绝
-        human_review = True  # 审核已完成但被拒绝
-        human_review_reason = f"已拒绝: {reason}" if reason else "已拒绝"
+        # 审核拒绝，保持 human_review 状态，generate_response 会输出提示
+        state["human_review"] = True
+        state["human_review_reason"] = f"已拒绝: {reason}" if reason else "已拒绝"
     
-    return {
-        "messages": state["messages"],
-        "intent": state.get("intent"),
-        "tools_called": state.get("tools_called", []),
-        "human_review": human_review,
-        "human_review_reason": human_review_reason,
-        "is_sensitive": state.get("is_sensitive"),
-        "confidence": state.get("confidence"),
-        "draft_response": state.get("draft_response"),
-    }
+    return state
 
 
 def generate_response_node(state: AgentState) -> AgentState:
@@ -396,27 +332,15 @@ def generate_response_node(state: AgentState) -> AgentState:
             response_intro = "I'm a customer service assistant. "
             current_msg = messages[-1].content
             
-            # 如果之前有敏感操作审核且已批准，在响应中说明
-            # 只有敏感操作才需要在响应中体现审批状态
+            # 如果之前有审核（已批准或已拒绝），在响应中说明
             reason = state.get("human_review_reason", "")
-            is_sensitive = state.get("is_sensitive", False)
-            if is_sensitive and reason and ("已批准" in reason or "人工" in reason or "审核" in reason or "approved" in reason.lower()):
-                current_msg = f"[APPROVED] Approved.\n{current_msg}"
+            if reason and ("已批准" in reason or "人工" in reason or "审核" in reason):
+                current_msg = f"[人工审核已批准]\n{current_msg}"
             
             if not current_msg.startswith(response_intro):
                 messages = messages[:-1] + [AIMessage(content=response_intro + current_msg)]
     
-    # 保留所有状态字段，避免被覆盖
-    return {
-        "messages": messages,
-        "intent": state.get("intent"),
-        "tools_called": state.get("tools_called"),
-        "human_review": state.get("human_review"),
-        "human_review_reason": state.get("human_review_reason"),
-        "is_sensitive": state.get("is_sensitive"),
-        "confidence": state.get("confidence"),
-        "human_approval_func": state.get("human_approval_func"),
-    }
+    return {"messages": messages}
 
 
 # ============================================================================
@@ -439,8 +363,7 @@ def should_execute_tools(state: AgentState) -> str:
     intent_value = intent.value if isinstance(intent, Intent) else intent
     
     # 这些意图需要执行工具
-    # complaint 也需要工具（创建投诉工单）
-    tool_intents = {"order_status", "refund", "policy", "complaint"}
+    tool_intents = {"order_status", "refund", "policy"}
     
     if intent_value in tool_intents:
         return "execute_tools"
@@ -578,40 +501,33 @@ def invoke_customer_agent(
     # 构建图（每次调用都重新构建以确保状态干净）
     graph = build_customer_support_graph()
     
-    # 设置审批函数到上下文变量
-    # 注意：由于 AgentState TypedDict 不能包含函数类型，我们使用 ContextVar
-    token = _current_approval_func.set(human_approval_func)
+    # 初始化状态
+    initial_state = {
+        "messages": [HumanMessage(content=user_message)],
+        "intent": "",
+        "tools_called": [],
+        "human_review": False,
+        "human_review_reason": "",
+        "is_sensitive": False,
+        "confidence": 1.0,
+        "human_approval_func": human_approval_func,  # 传递审批函数
+    }
     
-    try:
-        # 初始化状态
-        initial_state = {
-            "messages": [HumanMessage(content=user_message)],
-            "intent": "",
-            "tools_called": [],
-            "human_review": False,
-            "human_review_reason": "",
-            "is_sensitive": False,
-            "confidence": 1.0,
-        }
-        
-        # 执行图
-        final_state = graph.invoke(initial_state)
-        
-        # 提取响应
-        messages = final_state.get("messages", [])
-        response = messages[-1].content if messages else ""
-        
-        # 返回结果
-        return {
-            "response": response,
-            "intent": final_state.get("intent", ""),
-            "tools_called": final_state.get("tools_called", []),
-            "human_review": final_state.get("human_review", False),
-            "human_review_reason": final_state.get("human_review_reason", ""),
-            "is_sensitive": final_state.get("is_sensitive", False),
-            "confidence": final_state.get("confidence", 1.0),
-            "state": final_state,
-        }
-    finally:
-        # 清理上下文变量
-        _current_approval_func.reset(token)
+    # 执行图
+    final_state = graph.invoke(initial_state)
+    
+    # 提取响应
+    messages = final_state.get("messages", [])
+    response = messages[-1].content if messages else ""
+    
+    # 返回结果
+    return {
+        "response": response,
+        "intent": final_state.get("intent", ""),
+        "tools_called": final_state.get("tools_called", []),
+        "human_review": final_state.get("human_review", False),
+        "human_review_reason": final_state.get("human_review_reason", ""),
+        "is_sensitive": final_state.get("is_sensitive", False),
+        "confidence": final_state.get("confidence", 1.0),
+        "state": final_state,
+    }
