@@ -1,7 +1,29 @@
-"""Task Executor - Handles parallel task execution.
+"""
+任务执行器 - 负责并行执行任务并管理执行上下文
 
-The Task Executor coordinates the execution of tasks by sub-agents,
-manages dependencies, and tracks progress.
+【模块概述】
+TaskExecutor 是 Office Agent 系统的核心执行组件，负责：
+1. 并行执行 - 使用线程池并发执行多个任务
+2. 依赖管理 - 确保任务按正确的依赖顺序执行
+3. 进度跟踪 - 实时报告任务执行进度
+4. 数据共享 - 在任务之间传递数据
+
+【核心组件】
+
+1. TaskProgress (任务进度)
+   - 跟踪单个任务的执行进度
+   - 记录开始/完成时间
+   - 记录状态和消息
+
+2. ExecutionContext (执行上下文)
+   - 管理所有任务的执行状态
+   - 存储已完成任务的结果
+   - 维护共享数据供后续任务使用
+
+3. TaskExecutor (任务执行器)
+   - 使用 ThreadPoolExecutor 实现并行
+   - 支持任务依赖解析
+   - 回调机制报告进度
 """
 
 from __future__ import annotations
@@ -24,9 +46,23 @@ from .base import (
 from .sub_agents.registry import find_agent_for_task
 
 
+# ============================================================================
+# 执行进度和上下文
+# ============================================================================
+
 @dataclass
 class TaskProgress:
-    """Progress information for a task."""
+    """
+    任务执行进度信息
+    
+    【字段说明】
+    - task_id: 任务 ID
+    - status: 当前状态
+    - started_at: 开始时间
+    - completed_at: 完成时间
+    - progress_percent: 完成百分比 (0.0-100.0)
+    - message: 进度消息
+    """
     task_id: str
     status: TaskStatus
     started_at: datetime | None = None
@@ -37,15 +73,30 @@ class TaskProgress:
 
 @dataclass
 class ExecutionContext:
-    """Context for task execution."""
+    """
+    任务执行上下文 - 管理整个执行过程的状态
+    
+    【字段说明】
+    - plan: 关联的任务计划
+    - completed_tasks: 已完成任务的结果字典
+    - task_progress: 任务进度字典
+    - shared_data: 任务间共享的数据
+    - errors: 执行过程中的错误列表
+    """
     plan: TaskPlan
     completed_tasks: dict[str, TaskResult] = field(default_factory=dict)
     task_progress: dict[str, TaskProgress] = field(default_factory=dict)
     shared_data: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
-
+    
     def add_result(self, task_id: str, result: TaskResult) -> None:
-        """Add a task result."""
+        """
+        添加任务执行结果
+        
+        Args:
+            task_id: 任务 ID
+            result: 执行结果
+        """
         self.completed_tasks[task_id] = result
         self.task_progress[task_id] = TaskProgress(
             task_id=task_id,
@@ -54,128 +105,161 @@ class ExecutionContext:
             progress_percent=100.0 if result.is_successful() else 0.0,
             message=result.error or "Completed",
         )
-
-        # Store output in shared data for dependent tasks
+        
+        # 将输出存入共享数据，供后续任务使用
         if result.is_successful():
             self.shared_data[task_id] = result.output
 
 
-class TaskExecutor:
-    """Executes tasks in parallel using appropriate sub-agents."""
+# ============================================================================
+# 任务执行器
+# ============================================================================
 
+class TaskExecutor:
+    """
+    任务执行器 - 并行执行任务
+    
+    【执行流程】
+    1. 初始化：构建已完成任务集合
+    2. 循环执行：
+       a. 找出可执行的任务（依赖已满足）
+       b. 提交任务到线程池
+       c. 收集已完成的结果
+       d. 更新共享数据
+    3. 重复直到所有任务完成
+    4. 返回执行上下文
+    """
+    
     def __init__(
         self,
         progress_callback: Callable[[TaskProgress], None] | None = None,
         max_workers: int = 3,
     ):
+        """
+        初始化执行器
+        
+        Args:
+            progress_callback: 进度回调函数
+            max_workers: 最大并发数
+        """
         self.progress_callback = progress_callback
         self.max_workers = max_workers
         self._lock = threading.Lock()
-
+    
     def execute_plan(
         self,
         plan: TaskPlan,
         context: ExecutionContext | None = None
     ) -> ExecutionContext:
-        """Execute all tasks in a plan.
-
+        """
+        执行任务计划
+        
         Args:
-            plan: TaskPlan to execute
-            context: Optional execution context
-
+            plan: 要执行的任务计划
+            context: 可选的执行上下文（用于恢复执行）
+        
         Returns:
-            ExecutionContext with results
+            更新后的执行上下文
         """
         if context is None:
             context = ExecutionContext(plan=plan)
-
-        # Initialize progress tracking for NEW tasks only
+        
+        # 初始化新任务的进度跟踪
         for task in plan.tasks:
             if task.id not in context.task_progress:
                 context.task_progress[task.id] = TaskProgress(
                     task_id=task.id,
-                    status=task.status,  # Preserve existing status
+                    status=task.status,
                 )
-
-        # Build completed set from context
+        
+        # 构建已完成任务集合
         completed: set[str] = set(context.completed_tasks.keys())
-
-        # Execute tasks in parallel where possible
+        
+        # 使用线程池并行执行
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures: dict[str, Future] = {}
-
-            # Track which tasks are ready to execute (using context)
+            
+            # 主循环：持续执行直到全部完成
             while True:
-                # Re-check completed from context on each iteration
+                # 从上下文重新获取已完成任务
                 completed = set(context.completed_tasks.keys())
-
-                # Find tasks ready to execute
+                
+                # 找出可执行的任务
                 pending_tasks = [
                     task for task in plan.tasks
                     if task.status == TaskStatus.PENDING
                     and task.can_execute(completed)
                 ]
-
-                # Submit pending tasks
+                
+                # 提交待执行任务
                 for task in pending_tasks:
                     if task.id not in futures:
                         task.status = TaskStatus.RUNNING
                         context.task_progress[task.id].status = TaskStatus.RUNNING
                         context.task_progress[task.id].started_at = datetime.now()
-
+                        
+                        # 提交到线程池执行
                         future = executor.submit(self._execute_task, task, context)
                         futures[task.id] = future
-
-                # Check for completed futures
+                
+                # 检查已完成的 futures
                 done_futures = {tid: f for tid, f in futures.items() if f.done()}
                 for task_id, future in done_futures.items():
                     result = future.result()
                     task = plan.get_task(task_id)
+                    
                     if task:
                         task.status = result.status
                         task.result = result
                         context.task_progress[task_id].status = result.status
                         context.task_progress[task_id].completed_at = datetime.now()
                         context.add_result(task_id, result)
-
-                        # Update shared data for dependent tasks
+                        
+                        # 更新共享数据
                         if result.is_successful():
                             context.shared_data[task_id] = result.output
-
+                    
                     del futures[task_id]
-
-                # Report progress
+                
+                # 报告进度
                 if self.progress_callback:
                     for task_id, progress in context.task_progress.items():
                         self.progress_callback(progress)
-
-                # Check if we're done
+                
+                # 检查是否全部完成
                 if plan.all_completed() or (not pending_tasks and not futures):
                     break
-
-                # Small delay to prevent busy waiting
+                
+                # 小延迟防止忙等待
                 time.sleep(0.1)
-
+        
         return context
-
+    
     def _execute_task(
         self,
         task: Task,
         context: ExecutionContext
     ) -> TaskResult:
-        """Execute a single task.
-
+        """
+        执行单个任务
+        
+        【执行步骤】
+        1. 查找合适的 Agent
+        2. 准备输入数据（包含依赖任务的输出）
+        3. 调用 Agent 执行
+        4. 返回结果
+        
         Args:
-            task: Task to execute
-            context: Execution context
-
+            task: 要执行的任务
+            context: 执行上下文
+        
         Returns:
-            TaskResult
+            任务执行结果
         """
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.now()
-
-        # Report initial progress
+        
+        # 报告初始进度
         if self.progress_callback:
             self.progress_callback(TaskProgress(
                 task_id=task.id,
@@ -184,8 +268,8 @@ class TaskExecutor:
                 progress_percent=10.0,
                 message="Finding agent...",
             ))
-
-        # Find appropriate agent
+        
+        # 查找合适的 Agent
         agent = find_agent_for_task(task)
         if not agent:
             return TaskResult(
@@ -194,8 +278,8 @@ class TaskExecutor:
                 error=f"No agent found for capability: {task.capability_required}",
                 completed_at=datetime.now(),
             )
-
-        # Report agent found
+        
+        # 报告找到 Agent
         if self.progress_callback:
             self.progress_callback(TaskProgress(
                 task_id=task.id,
@@ -204,23 +288,24 @@ class TaskExecutor:
                 progress_percent=30.0,
                 message=f"Agent {agent.name} found",
             ))
-
-        # Prepare input data (include results from dependencies)
+        
+        # 准备输入数据（包含依赖任务的输出）
         input_data = task.input_data.copy()
         for dep_id in task.depends_on:
             if dep_id in context.shared_data:
                 input_data[f"from_{dep_id}"] = context.shared_data[dep_id]
-
-        # Update task input
+        
+        # 更新任务输入
         task.input_data = input_data
-
-        # Execute
+        
+        # 执行任务
         try:
-            # Simulate some work time
+            # 模拟一些处理时间
             time.sleep(0.2)
-
+            
+            # 调用 Agent 执行
             exec_result = agent.execute(task)
-
+            
             if exec_result.success:
                 return TaskResult(
                     task_id=task.id,
@@ -243,20 +328,21 @@ class TaskExecutor:
                 error=str(e),
                 completed_at=datetime.now(),
             )
-
+    
     def execute_single_task(
         self,
         task: Task,
         context: ExecutionContext | None = None
     ) -> tuple[TaskResult, ExecutionContext]:
-        """Execute a single task (useful for streaming scenarios).
-
+        """
+        执行单个任务（适用于流式场景）
+        
         Args:
-            task: Task to execute
-            context: Optional execution context
-
+            task: 要执行的任务
+            context: 可选的执行上下文
+        
         Returns:
-            Tuple of (TaskResult, updated ExecutionContext)
+            (TaskResult, updated ExecutionContext) 元组
         """
         if context is None:
             plan = TaskPlan(
@@ -265,10 +351,21 @@ class TaskExecutor:
                 tasks=[task],
             )
             context = ExecutionContext(plan=plan)
-
+        
         result = self._execute_task(task, context)
         task.status = result.status
         task.result = result
         context.add_result(task.id, result)
-
+        
         return result, context
+
+
+# ============================================================================
+# 导出
+# ============================================================================
+
+__all__ = [
+    "TaskProgress",
+    "ExecutionContext",
+    "TaskExecutor",
+]

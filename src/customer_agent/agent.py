@@ -1,424 +1,533 @@
-"""PEV (Plan-Execute-Verify) Customer Support Agent with Human-in-the-Loop.
+"""
+客户支持 Agent - 基于 PEV (Plan-Execute-Verify) 架构的智能客服系统
 
-Architecture:
-    - PLAN: Analyze user intent, decide tools to use
-    - EXECUTE: Call tools and get results
-    - VERIFY: Check policy, decide if human review needed
-    - HUMAN_REVIEW: (Optional) Manual approval for sensitive actions
+【模块概述】
+本模块实现了客服 Agent 的核心逻辑：
+1. PLAN 节点 - 分析用户意图，决定调用哪些工具
+2. EXECUTE 节点 - 调用 tools.py 中定义的工具
+3. VERIFY 节点 - 调用 policies.verify_policy 检查敏感词和置信度
+4. HUMAN_REVIEW 节点 - 敏感操作需人工审批
+
+【核心函数】
+- invoke_customer_agent(user_message, human_approval_func) - 主入口函数
+- build_customer_support_graph() - 构建 LangGraph 状态图
+
+【设计原则】
+- 使用结构化推理 (Structured Reasoning) 而非关键词匹配
+- 支持 Human-in-the-Loop 机制处理敏感操作
+- 策略验证确保回复符合合规要求
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable, TypedDict
+from typing import TypedDict, Annotated, Sequence
+from datetime import datetime
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
+# LangChain 核心组件
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.utils.function_calling import convert_to_openai_function
 
-from .mock_llm import MockChatModel, get_mock_model
-from .policies import PolicyDecision, verify_policy
-from .tools import create_refund_case, extract_order_id, lookup_order
-
-
-# --- State Definition ---
-
-class AgentStage(str, Enum):
-    """Agent execution stages."""
-    PLAN = "plan"
-    EXECUTE = "execute"
-    VERIFY = "verify"
-    HUMAN_REVIEW = "human_review"
-    FINAL = "final"
-
-
-@dataclass
-class PlanResult:
-    """Result from the PLAN stage."""
-    intent: str
-    tools_to_use: list[str]
-    confidence: float
-    draft_response: str
+# 工具和策略
+from .tools import (
+    lookup_order,           # 订单查询工具
+    create_refund_case,    # 创建退款工单工具
+    get_order_status,      # 获取订单状态工具
+)
+from .policies import (
+    verify_policy,         # 策略验证函数
+    is_sensitive_operation,  # 判断是否为敏感操作
+    SensitiveOperation,   # 敏感操作枚举
+)
+from .mock_llm import (
+    StructuredReasoningLLM,  # 结构化推理 LLM
+    StructuredResult as IntentClassification,  # 意图分类结果（别名）
+    Intent,  # 意图枚举类型
+)
 
 
-@dataclass
-class ExecuteResult:
-    """Result from the EXECUTE stage."""
-    tool_calls: list[dict[str, Any]]
-    tool_results: list[str]
-
-
-@dataclass
-class VerifyResult:
-    """Result from the VERIFY stage."""
-    decision: PolicyDecision
-
-
-@dataclass
-class HumanReviewResult:
-    """Result from HUMAN_REVIEW stage."""
-    approved: bool
-    modified_response: str | None = None
-
+# ============================================================================
+# LangGraph 状态定义
+# ============================================================================
 
 class AgentState(TypedDict):
-    """State passed between nodes in the agent graph."""
-    # Input
-    user_message: str
-
-    # Stage outputs
-    current_stage: AgentStage
-    plan: PlanResult | None
-    execute: ExecuteResult | None
-    verify: VerifyResult | None
-    human_review: HumanReviewResult | None
-
-    # Final output
-    final_response: str
-    messages: list[dict[str, Any]]
-
-    # Metadata
-    error: str | None
-
-
-# --- Node Implementations ---
-
-def create_plan_node(llm: MockChatModel | None = None) -> Callable[[AgentState], AgentState]:
-    """Create the PLAN node that analyzes user intent and decides actions."""
-    model = llm or get_mock_model()
-
-    def plan_node(state: AgentState) -> AgentState:
-        user_message = state["user_message"]
-
-        # Extract order ID if present
-        order_id = extract_order_id(user_message)
-
-        # Get LLM response
-        messages = [
-            SystemMessage(content="""You are a customer support agent. Analyze the user's message and:
-1. Identify their intent (order_status, refund, general_inquiry, etc.)
-2. Decide if you need to use tools
-3. Draft a response
-
-Always extract the order ID from the message if present."""),
-            HumanMessage(content=user_message),
-        ]
-
-        response = model.invoke(messages)
-        response_content = response.content if hasattr(response, 'content') else str(response)
-
-        # Extract metadata
-        confidence = 0.5
-        intent = "unknown"
-        if hasattr(response, 'additional_kwargs'):
-            confidence = response.additional_kwargs.get('confidence', 0.5)
-            intent = response.additional_kwargs.get('intent', 'unknown')
-
-        # Determine tools to use based on user message keywords
-        # (More reliable than LLM-returned intent)
-        tools_to_use = []
-        draft_response = response_content
-        user_message_lower = user_message.lower()
-
-        # Sensitive action keywords that require human review
-        sensitive_keywords = ("refund", "退款", "cancel", "取消", "complaint", "投诉",
-                            "chargeback", "赔偿", "damaged", "损坏", "late", "late",
-                            "open", "broken", "问题", "issue")
-
-        # Check if order ID is present
-        has_order_id = order_id != "UNKNOWN"
-        has_sensitive_keyword = any(keyword in user_message_lower for keyword in sensitive_keywords)
-
-        if has_order_id:
-            # Always lookup order if ID is present
-            tools_to_use = ["lookup_order"]
-
-            # Add create_refund_case if sensitive action detected
-            if has_sensitive_keyword:
-                tools_to_use.append("create_refund_case")
-                draft_response = f"Based on your inquiry about order {order_id}, I found:"
-            else:
-                draft_response = f"Based on your inquiry about order {order_id}, I found:"
-        elif has_sensitive_keyword:
-            # No order ID but has sensitive keywords - still need to create refund case
-            tools_to_use = ["create_refund_case"]
-            draft_response = response_content
-
-        # Extract confidence from LLM metadata
-        if hasattr(response, 'additional_kwargs'):
-            confidence = response.additional_kwargs.get('confidence', confidence)
-
-        state["plan"] = PlanResult(
-            intent=intent,
-            tools_to_use=tools_to_use,
-            confidence=confidence,
-            draft_response=draft_response,
-        )
-        state["current_stage"] = AgentStage.EXECUTE
-
-        return state
-
-    return plan_node
+    """
+    Agent 状态定义 - LangGraph 使用 TypedDict 定义状态结构
+    
+    【状态字段】
+    - messages: 消息历史列表
+    - intent: 识别的用户意图
+    - tools_called: 已调用的工具列表
+    - human_review: 是否需要人工审核
+    - human_review_reason: 人工审核原因
+    - is_sensitive: 是否检测到敏感内容
+    - confidence: 响应置信度
+    """
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    intent: str                    # 识别的用户意图
+    tools_called: list[str]       # 已调用的工具名称列表
+    human_review: bool            # 是否需要人工审核
+    human_review_reason: str      # 人工审核的原因
+    is_sensitive: bool            # 是否包含敏感内容
+    confidence: float             # 响应置信度 (0.0-1.0)
 
 
-def create_execute_node() -> Callable[[AgentState], AgentState]:
-    """Create the EXECUTE node that calls tools."""
-    tools_map = {
-        "lookup_order": lookup_order,
-        "create_refund_case": create_refund_case,
+def add_messages(left: list, right: list) -> list:
+    """
+    消息合并函数 - 将新消息追加到消息列表
+    
+    Args:
+        left: 现有消息列表
+        right: 新消息列表
+    
+    Returns:
+        合并后的消息列表
+    """
+    # 简单追加，实际使用中可能需要去重等逻辑
+    return left + right
+
+
+# ============================================================================
+# LLM 和工具配置
+# ============================================================================
+
+# 创建结构化推理 LLM 实例
+# 使用 Mock 实现，生产环境可替换为真实的 LLM API
+llm = StructuredReasoningLLM()
+
+# 将工具函数转换为 OpenAI 函数格式
+# 供 LLM 调用时使用
+tools = [lookup_order, create_refund_case, get_order_status]
+tool_functions = [convert_to_openai_function(t) for t in tools]
+
+# 将工具绑定到 LLM
+# 这样 LLM 可以自动决定调用哪个工具
+llm_with_tools = llm.bind(functions=tool_functions)
+
+
+# ============================================================================
+# Agent 节点定义
+# ============================================================================
+
+def analyze_intent_node(state: AgentState) -> AgentState:
+    """
+    【PLAN 节点】分析用户意图
+    
+    使用结构化推理 LLM 分析用户消息，确定：
+    1. 用户的真实意图 (intent)
+    2. 需要调用的工具 (task_type)
+    3. 任务参数 (parameters)
+    
+    Args:
+        state: 当前 Agent 状态
+    
+    Returns:
+        更新后的 Agent 状态
+    """
+    messages = state["messages"]
+    user_message = messages[-1].content
+    
+    # 调用结构化推理 LLM
+    reasoning_result = llm.analyze_intent(user_message)
+    
+    # 更新状态
+    return {
+        "intent": reasoning_result.intent,
+        "tools_called": [],          # 清空已调用工具
+        "human_review": False,        # 默认不需要人工审核
+        "human_review_reason": "",
+        "confidence": reasoning_result.confidence,
     }
 
-    def execute_node(state: AgentState) -> AgentState:
-        plan = state.get("plan")
-        if not plan:
-            state["error"] = "No plan found, execute called before plan"
-            state["current_stage"] = AgentStage.FINAL
-            return state
 
-        tool_calls = []
-        tool_results = []
-        user_message = state["user_message"]
-        order_id = extract_order_id(user_message)
-
-        # Execute each tool
-        for tool_name in plan.tools_to_use:
-            tool_func = tools_map.get(tool_name)
-            if not tool_func:
-                tool_results.append(f"Tool {tool_name} not found")
-                continue
-
-            try:
-                # Prepare tool arguments
-                if tool_name == "lookup_order":
-                    result = tool_func.invoke({"order_id": order_id})
-                elif tool_name == "create_refund_case":
-                    reason = user_message
-                    result = tool_func.invoke({"order_id": order_id, "reason": reason})
-                else:
-                    result = tool_func.invoke({})
-
-                tool_calls.append({
-                    "tool": tool_name,
-                    "args": {"order_id": order_id} if order_id != "UNKNOWN" else {},
-                })
-                tool_results.append(str(result))
-            except Exception as e:
-                tool_results.append(f"Error calling {tool_name}: {str(e)}")
-
-        state["execute"] = ExecuteResult(
-            tool_calls=tool_calls,
-            tool_results=tool_results,
-        )
-        state["current_stage"] = AgentStage.VERIFY
-
-        return state
-
-    return execute_node
-
-
-def create_verify_node() -> Callable[[AgentState], AgentState]:
-    """Create the VERIFY node that checks policy compliance."""
-    def verify_node(state: AgentState) -> AgentState:
-        plan = state.get("plan")
-        execute = state.get("execute")
-
-        if not plan:
-            state["error"] = "No plan found"
-            state["current_stage"] = AgentStage.FINAL
-            return state
-
-        # Build draft response from plan and tool results
-        draft = plan.draft_response
-        if execute and execute.tool_results:
-            draft += "\n" + "\n".join(execute.tool_results)
-
-        # Verify policy
-        decision = verify_policy(
-            user_message=state["user_message"],
-            draft=draft,
-            confidence=plan.confidence,
-        )
-
-        state["verify"] = VerifyResult(decision=decision)
-
-        # Decide next stage
-        if decision.requires_human:
-            state["current_stage"] = AgentStage.HUMAN_REVIEW
-        else:
-            state["current_stage"] = AgentStage.FINAL
-            state["final_response"] = draft
-
-        return state
-
-    return verify_node
-
-
-def create_human_review_node(
-    human_approval_func: Callable[[str, str], tuple[bool, str | None]] | None = None
-) -> Callable[[AgentState], AgentState]:
-    """Create the HUMAN_REVIEW node that requires manual approval.
-
-    Args:
-        human_approval_func: Optional function that takes (user_message, draft_response)
-            and returns (approved, modified_response). If None, auto-approves after 3 seconds.
+def execute_tools_node(state: AgentState) -> AgentState:
     """
-    def human_review_node(state: AgentState) -> AgentState:
-        plan = state.get("plan")
-        execute = state.get("execute")
-
-        if not plan:
-            state["error"] = "No plan found"
-            state["current_stage"] = AgentStage.FINAL
-            return state
-
-        # Build draft response
-        draft = plan.draft_response
-        if execute and execute.tool_results:
-            draft += "\n" + "\n".join(execute.tool_results)
-
-        # Call human approval function
-        if human_approval_func:
-            approved, modified = human_approval_func(state["user_message"], draft)
-        else:
-            # Default: simulate human review
-            # In real scenario, this would pause and wait for human input
-            approved = True
-            modified = None
-            print(f"[HUMAN REVIEW REQUIRED] Reason: {state['verify'].decision.reason}")
-            print(f"[HUMAN REVIEW] Draft response:\n{draft}")
-            print("[HUMAN REVIEW] Auto-approved for demo (set human_approval_func for real approval)")
-
-        state["human_review"] = HumanReviewResult(
-            approved=approved,
-            modified_response=modified,
-        )
-
-        if approved:
-            state["final_response"] = modified if modified else draft
-        else:
-            state["final_response"] = "Your request has been escalated to our support team. We will contact you within 24 hours."
-
-        state["current_stage"] = AgentStage.FINAL
-
-        return state
-
-    return human_review_node
-
-
-# --- Graph Builder ---
-
-def build_customer_support_graph(
-    human_approval_func: Callable[[str, str], tuple[bool, str | None]] | None = None,
-    llm: MockChatModel | None = None,
-) -> StateGraph:
-    """Build the PEV customer support agent graph.
-
+    【EXECUTE 节点】执行工具调用
+    
+    根据 PLAN 节点的决策，调用相应的工具：
+    - order_status: 调用 lookup_order
+    - refund: 调用 create_refund_case
+    - policy: 调用 get_order_status
+    
     Args:
-        human_approval_func: Function for human approval (user_message, draft) -> (approved, modified_response)
-        llm: Mock LLM instance (uses default if None)
-
+        state: 当前 Agent 状态
+    
     Returns:
-        Compiled StateGraph
+        更新后的 Agent 状态
     """
-    # Create nodes
-    plan_node = create_plan_node(llm)
-    execute_node = create_execute_node()
-    verify_node = create_verify_node()
-    human_review_node = create_human_review_node(human_approval_func)
+    messages = state["messages"]
+    user_message = messages[-1].content
+    intent = state["intent"]
+    reasoning = llm.analyze_intent(user_message)
+    
+    tools_called = []
+    tool_results = []
+    
+    # 根据意图类型决定调用哪些工具
+    # intent 可能是 Intent 枚举或字符串
+    intent_value = intent.value if isinstance(intent, Intent) else intent
+    
+    if intent_value == "order_status":
+        # 查询订单状态
+        order_id = reasoning.parameters.get("order_id", "")
+        result = lookup_order.invoke({"query": order_id})
+        tools_called.append("lookup_order")
+        tool_results.append(str(result) if hasattr(result, 'content') else result)
+    
+    elif intent_value == "refund":
+        # 创建退款工单 - 敏感操作！
+        refund_reason = reasoning.parameters.get("reason", "用户请求退款")
+        result = create_refund_case.invoke({
+            "order_id": reasoning.parameters.get("order_id", ""),
+            "reason": refund_reason,
+        })
+        tools_called.append("create_refund_case")
+        tool_results.append(str(result) if hasattr(result, 'content') else result)
+    
+    elif intent_value == "policy":
+        # 查询政策
+        result = get_order_status.invoke({})
+        tools_called.append("get_order_status")
+        tool_results.append(str(result) if hasattr(result, 'content') else result)
+    
+    # 添加工具执行结果到消息
+    if tool_results:
+        messages = messages + [AIMessage(content="\n".join(tool_results))]
+    
+    return {
+        "messages": messages,
+        "tools_called": state["tools_called"] + tools_called,
+    }
 
-    # Build graph
+
+def verify_response_node(state: AgentState) -> AgentState:
+    """
+    【VERIFY 节点】验证响应策略
+    
+    检查回复是否：
+    1. 包含敏感词/违规内容
+    2. 符合置信度要求
+    3. 需要人工审核
+    
+    Args:
+        state: 当前 Agent 状态
+    
+    Returns:
+        更新后的 Agent 状态
+    """
+    messages = state["messages"]
+    last_response = messages[-1].content if messages else ""
+    
+    # 调用策略验证函数
+    # 返回 (是否合规, 敏感词列表, 置信度)
+    is_compliant, sensitive_words, confidence = verify_policy(
+        last_response, 
+        state.get("intent", "")
+    )
+    
+    # 检查是否包含敏感内容
+    is_sensitive = len(sensitive_words) > 0
+    
+    # 检查是否为敏感操作（如退款）
+    intent = state.get("intent", "")
+    intent_value = intent.value if isinstance(intent, Intent) else intent
+    requires_human_review = (
+        is_sensitive or 
+        intent_value == "refund" or
+        "refund" in state.get("tools_called", [])
+    )
+    
+    # 构建审核原因
+    reason = ""
+    if is_sensitive:
+        reason = f"检测到敏感词: {', '.join(sensitive_words)}"
+    elif requires_human_review:
+        reason = "退款操作需要人工审核"
+    
+    return {
+        "is_sensitive": is_sensitive,
+        "human_review": requires_human_review,
+        "human_review_reason": reason,
+        "confidence": confidence,
+    }
+
+
+def human_review_node(state: AgentState) -> AgentState:
+    """
+    【HUMAN_REVIEW 节点】处理人工审核流程
+    
+    如果操作需要人工审核：
+    1. 调用 human_approval_func 获取审核结果
+    2. 根据审核结果决定是否继续执行敏感操作
+    
+    Args:
+        state: 当前 Agent 状态
+    
+    Returns:
+        更新后的 Agent 状态
+    """
+    if not state.get("human_review"):
+        return state
+    
+    # 获取审批函数
+    approval_func = state.get("human_approval_func")
+    
+    # 如果没有审批函数，使用默认值（拒绝）
+    if not approval_func:
+        # 默认拒绝敏感操作
+        state["human_review"] = False
+        state["human_review_reason"] = "无审批函数，默认拒绝敏感操作"
+        return state
+    
+    # 调用审批函数
+    user_message = state["messages"][0].content if state["messages"] else ""
+    draft_response = state.get("draft_response", "")
+    
+    try:
+        approved, reason = approval_func(user_message, draft_response)
+    except Exception:
+        approved = False
+        reason = "审批函数执行失败"
+    
+    # 根据审批结果更新状态
+    if approved:
+        state["human_review"] = False  # 审核通过，不需要等待
+        state["human_review_reason"] = f"已批准: {reason}" if reason else "已批准"
+    else:
+        # 审核拒绝，保持 human_review 状态，generate_response 会输出提示
+        state["human_review"] = True
+        state["human_review_reason"] = f"已拒绝: {reason}" if reason else "已拒绝"
+    
+    return state
+
+
+def generate_response_node(state: AgentState) -> AgentState:
+    """
+    【RESPONSE 节点】生成最终响应
+    
+    综合所有信息，生成最终的回复消息：
+    1. 如果需要人工审核，输出待审核提示
+    2. 否则输出工具执行结果
+    
+    Args:
+        state: 当前 Agent 状态
+    
+    Returns:
+        更新后的 Agent 状态
+    """
+    messages = state["messages"]
+    
+    # 如果需要人工审核
+    if state.get("human_review"):
+        review_msg = (
+            f"\n\n[待人工审核]\n"
+            f"原因: {state.get('human_review_reason', '请确认操作')}\n"
+            f"请确认是否继续执行。"
+        )
+        messages = messages + [AIMessage(content=review_msg)]
+    else:
+        # 正常响应 - 添加回复前缀
+        if state["messages"]:
+            response_intro = "I'm a customer service assistant. "
+            current_msg = messages[-1].content
+            
+            # 如果之前有审核（已批准或已拒绝），在响应中说明
+            reason = state.get("human_review_reason", "")
+            if reason and ("已批准" in reason or "人工" in reason or "审核" in reason):
+                current_msg = f"[人工审核已批准]\n{current_msg}"
+            
+            if not current_msg.startswith(response_intro):
+                messages = messages[:-1] + [AIMessage(content=response_intro + current_msg)]
+    
+    return {"messages": messages}
+
+
+# ============================================================================
+# 条件路由函数
+# ============================================================================
+
+def should_execute_tools(state: AgentState) -> str:
+    """
+    判断是否需要执行工具
+    
+    根据意图类型决定路由：
+    - greeting/thanks/off_topic: 直接生成响应
+    - order_status/refund/policy: 执行工具
+    
+    Returns:
+        "execute_tools" 或 "generate_response"
+    """
+    intent = state.get("intent", "")
+    # intent 可能是 Intent 枚举或字符串
+    intent_value = intent.value if isinstance(intent, Intent) else intent
+    
+    # 这些意图需要执行工具
+    tool_intents = {"order_status", "refund", "policy"}
+    
+    if intent_value in tool_intents:
+        return "execute_tools"
+    return "generate_response"
+
+
+def should_verify(state: AgentState) -> str:
+    """
+    判断是否需要验证
+    
+    Returns:
+        "verify_response" 或 "generate_response"
+    """
+    # 如果执行了工具调用，需要验证
+    if state.get("tools_called"):
+        return "verify_response"
+    return "generate_response"
+
+
+def should_human_review(state: AgentState) -> str:
+    """
+    判断是否需要人工审核
+    
+    Returns:
+        "human_review" 或 "generate_response"
+    """
+    if state.get("human_review"):
+        return "human_review"
+    return "generate_response"
+
+
+# ============================================================================
+# 构建 LangGraph
+# ============================================================================
+
+def build_customer_support_graph():
+    """
+    构建客服 Agent 的 LangGraph 状态图
+    
+    【图结构】
+    START -> analyze_intent (PLAN)
+                  ↓
+            ┌─────┴─────┐
+            ↓           ↓
+      [不需要工具]   [需要工具]
+            ↓           ↓
+            └─────┬─────┘
+                  ↓
+            execute_tools (EXECUTE)
+                  ↓
+            verify_response (VERIFY)
+                  ↓
+            ┌─────┴─────┐
+            ↓           ↓
+        [需要审核]  [不需要审核]
+            ↓           ↓
+            └─────┬─────┘
+                  ↓
+            generate_response
+                  ↓
+                END
+    
+    Returns:
+        编译后的 StateGraph
+    """
+    # 创建状态图
     workflow = StateGraph(AgentState)
-
-    # Add nodes
-    workflow.add_node("plan", plan_node)
-    workflow.add_node("execute", execute_node)
-    workflow.add_node("verify", verify_node)
-    workflow.add_node("human_review", human_review_node)
-    workflow.add_node("final", lambda s: s)
-
-    # Define edges
-    workflow.set_entry_point("plan")
-    workflow.add_edge("plan", "execute")
-    workflow.add_edge("execute", "verify")
-
-    # Conditional edge from verify
-    def should_human_review(state: AgentState) -> str:
-        verify = state.get("verify")
-        if verify and verify.decision.requires_human:
-            return "human_review"
-        return "final"
-
-    workflow.add_conditional_edges("verify", should_human_review)
-    workflow.add_edge("human_review", "final")
-    workflow.add_edge("final", END)
-
+    
+    # 注册节点
+    workflow.add_node("analyze_intent", analyze_intent_node)     # PLAN 节点
+    workflow.add_node("execute_tools", execute_tools_node)       # EXECUTE 节点
+    workflow.add_node("verify_response", verify_response_node)   # VERIFY 节点
+    workflow.add_node("human_review", human_review_node)         # HUMAN_REVIEW 节点
+    workflow.add_node("generate_response", generate_response_node)  # RESPONSE 节点
+    
+    # 设置入口点
+    workflow.set_entry_point("analyze_intent")
+    
+    # 添加边 (edges)
+    workflow.add_conditional_edges(
+        "analyze_intent",
+        should_execute_tools,
+        {
+            "execute_tools": "execute_tools",
+            "generate_response": "generate_response",
+        }
+    )
+    
+    workflow.add_edge("execute_tools", "verify_response")
+    
+    workflow.add_conditional_edges(
+        "verify_response",
+        should_human_review,
+        {
+            "human_review": "human_review",
+            "generate_response": "generate_response",
+        }
+    )
+    
+    workflow.add_edge("human_review", "generate_response")
+    workflow.add_edge("generate_response", END)
+    
+    # 编译图
     return workflow.compile()
 
 
-# --- Main Interface ---
+# ============================================================================
+# 主入口函数
+# ============================================================================
 
 def invoke_customer_agent(
     user_message: str,
-    human_approval_func: Callable[[str, str], tuple[bool, str | None]] | None = None,
-    llm: MockChatModel | None = None,
-) -> dict[str, Any]:
-    """Invoke the customer support agent.
-
-    Args:
-        user_message: User's input message
-        human_approval_func: Optional function for human approval
-        llm: Mock LLM instance (uses default if None)
-
-    Returns:
-        Dictionary with:
-            - response: Final response to user
-            - state: Full agent state for debugging
-            - needs_human_review: Whether human review was required
+    human_approval_func: callable = None,
+) -> dict:
     """
-    # Build or get cached graph
-    graph = build_customer_support_graph(human_approval_func, llm)
-
-    # Initialize state
-    initial_state: AgentState = {
-        "user_message": user_message,
-        "current_stage": AgentStage.PLAN,
-        "plan": None,
-        "execute": None,
-        "verify": None,
-        "human_review": None,
-        "final_response": "",
-        "messages": [],
-        "error": None,
+    调用客服 Agent 处理用户消息
+    
+    【参数】
+    - user_message: 用户输入的消息
+    - human_approval_func: 人工审批回调函数（可选）
+    
+    【返回】
+    包含以下键的字典：
+    - response: Agent 的回复文本
+    - intent: 识别的用户意图
+    - tools_called: 调用的工具列表
+    - human_review: 是否需要人工审核
+    - state: 完整的 Agent 状态
+    
+    【示例】
+    >>> result = invoke_customer_agent("Where is my order #A100?")
+    >>> print(result["response"])
+    >>> print(result["intent"])  # "order_status"
+    """
+    # 构建图（每次调用都重新构建以确保状态干净）
+    graph = build_customer_support_graph()
+    
+    # 初始化状态
+    initial_state = {
+        "messages": [HumanMessage(content=user_message)],
+        "intent": "",
+        "tools_called": [],
+        "human_review": False,
+        "human_review_reason": "",
+        "is_sensitive": False,
+        "confidence": 1.0,
+        "human_approval_func": human_approval_func,  # 传递审批函数
     }
-
-    # Run graph
+    
+    # 执行图
     final_state = graph.invoke(initial_state)
-
-    # Build response
-    needs_human_review = (
-        final_state.get("verify") is not None
-        and final_state.get("verify").decision.requires_human
-    )
-
+    
+    # 提取响应
+    messages = final_state.get("messages", [])
+    response = messages[-1].content if messages else ""
+    
+    # 返回结果
     return {
-        "response": final_state.get("final_response", ""),
+        "response": response,
+        "intent": final_state.get("intent", ""),
+        "tools_called": final_state.get("tools_called", []),
+        "human_review": final_state.get("human_review", False),
+        "human_review_reason": final_state.get("human_review_reason", ""),
+        "is_sensitive": final_state.get("is_sensitive", False),
+        "confidence": final_state.get("confidence", 1.0),
         "state": final_state,
-        "needs_human_review": needs_human_review,
-        "stage": final_state.get("current_stage", AgentStage.FINAL).value,
-        "error": final_state.get("error"),
     }
-
-
-# --- Exports ---
-
-__all__ = [
-    "build_customer_support_graph",
-    "invoke_customer_agent",
-    "AgentState",
-    "AgentStage",
-    "PlanResult",
-    "ExecuteResult",
-    "VerifyResult",
-    "HumanReviewResult",
-]

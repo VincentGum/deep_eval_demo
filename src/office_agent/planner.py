@@ -1,7 +1,46 @@
-"""Planner Agent - High-level reasoning for task plan generation.
+"""
+Planner Agent - 任务规划器，负责分析用户请求并生成任务计划
 
-The Planner Agent analyzes user requests and generates structured task plans
-using a mock high-level reasoning model with structured reasoning (no keyword matching).
+【模块概述】
+Planner Agent 是 Office Agent 系统的核心组件之一，负责：
+1. 语义分析 - 理解用户请求的深层含义
+2. 意图分类 - 识别用户的真实意图
+3. 能力映射 - 将意图映射到所需的能力
+4. 任务生成 - 创建结构化的任务列表
+
+【核心组件】
+
+1. SemanticAnalyzer (语义分析器)
+   - 使用 NLP 技术分析用户消息
+   - 提取关键特征：动作词、对象名词、上下文等
+   - 支持中英文双语分析
+
+2. CapabilityMapper (能力映射器)
+   - 将语义特征映射到 Agent 能力
+   - 使用决策规则而非简单匹配
+   - 支持复杂的多能力组合
+
+3. TaskPlanGenerator (任务计划生成器)
+   - 基于语义特征生成任务序列
+   - 处理任务依赖关系
+   - 确定任务优先级
+
+4. MockReasoningModel (Mock 推理模型)
+   - 模拟高级推理模型（如 o1）的思考过程
+   - 生成结构化的推理步骤
+   - 支持调试和解释
+
+【设计原则】
+1. 语义优先：避免关键词匹配，使用语义理解
+2. 结构化推理：多步骤推理过程，可解释
+3. 可扩展性：新意图类型和能力的低耦合扩展
+
+【意图类型】
+- INQUIRE: 查询/询问类请求
+- MANIPULATE: 操作/处理类请求
+- ANALYZE: 分析/统计类请求
+- REPORT: 报告生成类请求
+- COMMUNICATE: 沟通/通知类请求
 """
 
 from __future__ import annotations
@@ -9,163 +48,187 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
-from .base import AgentCapability, Task, TaskPlan, TaskStatus
+from .base import (
+    Task, TaskPlan, TaskPriority, AgentCapability,
+    create_task_id
+)
 
 
 # ============================================================================
-# Intent Classification and Semantic Understanding
+# 意图类型枚举
 # ============================================================================
 
-class IntentType:
-    """Enum-like class for intent types."""
-    INQUIRE = "inquire"           # Querying information
-    MANIPULATE = "manipulate"      # Creating/modifying data
-    ANALYZE = "analyze"            # Processing and analyzing data
-    REPORT = "report"               # Generating reports
-    AUTOMATE = "automate"          # Automating workflows
-    COMMUNICATE = "communicate"     # Communication tasks
+class IntentType(str, Enum):
+    """
+    意图类型枚举
+    
+    【类型说明】
+    - INQUIRE: 查询类 - 用户想要获取信息
+    - MANIPULATE: 操作类 - 用户想要执行某种操作
+    - ANALYZE: 分析类 - 用户想要分析数据
+    - REPORT: 报告类 - 用户想要生成报告
+    - COMMUNICATE: 沟通类 - 用户想要与他人沟通
+    """
+    INQUIRE = "inquire"           # 查询
+    MANIPULATE = "manipulate"     # 操作
+    ANALYZE = "analyze"          # 分析
+    REPORT = "report"             # 报告
+    COMMUNICATE = "communicate"   # 沟通
 
 
-class ActionVerb:
-    """Represents action verbs that indicate task types."""
-    # Inquiry verbs
-    INQUIRE_VERBS = frozenset({
-        'what', 'where', 'when', 'who', 'how', 'which',
-        'find', 'search', 'lookup', 'get', 'fetch', 'retrieve',
-        'check', 'view', 'show', 'tell', 'explain', 'describe',
-        'status', 'progress', 'state'
-    })
-    
-    # Manipulation verbs
-    MANIPULATE_VERBS = frozenset({
-        'create', 'make', 'generate', 'build', 'add',
-        'update', 'modify', 'edit', 'change', 'alter',
-        'delete', 'remove', 'cancel',
-        'submit', 'send', 'post', 'publish',
-        'save', 'store', 'write', 'record'
-    })
-    
-    # Analysis verbs
-    ANALYZE_VERBS = frozenset({
-        'analyze', 'process', 'calculate', 'compute',
-        'transform', 'convert', 'format', 'parse',
-        'compare', 'evaluate', 'assess', 'measure',
-        'sum', 'count', 'average', 'aggregate', 'summarize',
-        'filter', 'sort', 'group', 'join', 'merge'
-    })
-    
-    # Report verbs
-    REPORT_VERBS = frozenset({
-        'report', 'summarize', 'document', 'describe',
-        'prepare', 'draft', 'compose', 'outline',
-        'export', 'present', 'share', 'deliver'
-    })
-    
-    # Communication verbs
-    COMMUNICATE_VERBS = frozenset({
-        'email', 'send', 'notify', 'message', 'contact',
-        'invite', 'inform', 'alert', 'remind'
-    })
-
+# ============================================================================
+# 语义特征数据类
+# ============================================================================
 
 @dataclass
 class SemanticFeatures:
-    """Structured semantic features extracted from user request."""
-    # Core intent classification
+    """
+    语义特征 - 存储分析得到的语义特征
+    
+    【字段说明】
+    - primary_intent: 主要意图
+    - secondary_intent: 次要意图（如果有）
+    - action_verbs: 动作动词列表
+    - object_nouns: 对象名词列表
+    - data_sources: 数据来源
+    - output_format: 输出格式
+    - has_urgency: 是否有紧急标识
+    - has_time_reference: 是否有时间参考
+    - has_quantity: 是否有数量指标
+    - has_quality_requirement: 是否有质量要求
+    - is_multi_step: 是否为多步骤任务
+    - requires_aggregation: 是否需要聚合
+    - requires_visualization: 是否需要可视化
+    - requires_collaboration: 是否需要协作
+    """
     primary_intent: IntentType = IntentType.INQUIRE
     secondary_intent: IntentType | None = None
     
-    # Action patterns
     action_verbs: list[str] = field(default_factory=list)
     object_nouns: list[str] = field(default_factory=list)
     
-    # Context indicators
+    data_sources: list[str] = field(default_factory=list)
+    output_format: str = "text"
+    
     has_urgency: bool = False
-    has_quantity: bool = False
     has_time_reference: bool = False
+    has_quantity: bool = False
     has_quality_requirement: bool = False
     
-    # Data patterns
-    data_sources: list[str] = field(default_factory=list)
-    output_format: str | None = None
-    
-    # Complexity indicators
     is_multi_step: bool = False
     requires_aggregation: bool = False
     requires_visualization: bool = False
     requires_collaboration: bool = False
 
 
+# ============================================================================
+# 语义分析器
+# ============================================================================
+
 class SemanticAnalyzer:
-    """Analyzes user requests to extract semantic features.
+    """
+    语义分析器 - 分析用户消息的语义特征
     
-    This replaces keyword matching with structured feature extraction
-    and rule-based intent classification.
+    【分析流程】
+    1. 分词和预处理
+    2. 意图分类
+    3. 动作模式提取
+    4. 上下文检测
+    5. 数据源识别
+    6. 输出格式判断
+    7. 复杂度评估
     """
     
-    # Patterns for data source detection (no keyword matching)
-    DATA_SOURCE_PATTERNS = {
-        'database': [r'db', r'database', r'table', r'query', r'sql'],
-        'api': [r'api', r'endpoint', r'rest', r'http', r'json', r'xml'],
-        'file': [r'file', r'document', r'csv', r'excel', r'pdf', r'txt'],
-        'web': [r'website', r'web', r'url', r'http', r'html', r'网页'],
-        'email': [r'email', r'mail', r'inbox', r'smtp'],
-    }
+    # 动作动词集合
+    class ActionVerb:
+        """动作动词集合"""
+        INQUIRE_VERBS = {
+            'find', 'search', 'look', 'get', 'check', 'show', 'display',
+            'retrieve', 'fetch', 'query', 'obtain', '查询', '查找', '获取',
+            'what', 'which', 'where', 'when', 'how'
+        }
+        MANIPULATE_VERBS = {
+            'create', 'update', 'delete', 'modify', 'change', 'set', 'add',
+            'generate', 'submit', 'send', '创建', '更新', '修改', '提交'
+        }
+        ANALYZE_VERBS = {
+            'analyze', 'calculate', 'compute', 'sum', 'average', 'count',
+            'compare', 'evaluate', 'assess', '统计', '分析', '计算'
+        }
+        REPORT_VERBS = {
+            'report', 'summarize', 'compile', 'document', 'prepare', 'generate',
+            '报告', '汇总', '整理', '生成'
+        }
+        COMMUNICATE_VERBS = {
+            'send', 'email', 'notify', 'share', 'distribute', '通知', '发送', '分享'
+        }
     
-    # Output format patterns
-    OUTPUT_FORMAT_PATTERNS = {
-        'markdown': [r'markdown', r'md', r'\.md'],
-        'pdf': [r'pdf', r'report'],
-        'excel': [r'excel', r'xlsx', r'spreadsheet', r'表格'],
-        'chart': [r'chart', r'graph', r'plot', r'visualization', r'图表'],
-        'table': [r'table', r'grid', r'表格'],
-        'email': [r'email', r'mail'],
-    }
-    
-    # Urgency indicators
+    # 紧迫性模式
     URGENCY_PATTERNS = [
-        r'\burgent\b', r'\basap\b', r'\bimmediately\b',
-        r'\b紧急\b', r'\b马上\b', r'\b尽快\b',
-        r'\bimportant\b', r'\bcritical\b', r'\bpriority\b'
+        r'\burgent\b', r'\basap\b', r'\bimmediately\b', r'\b紧急\b',
+        r'\bright now\b', r'\bASAP\b', r'\b尽快\b'
     ]
     
-    # Time reference patterns
+    # 时间参考模式
     TIME_PATTERNS = [
-        r'\bweek(ly)?\b', r'\bmonth(ly)?\b', r'\byear(ly)?\b',
-        r'\btoday\b', r'\byesterday\b', r'\btomorrow\b',
-        r'\bthis week\b', r'\blast week\b',
-        r'\b周\b', r'\b月\b', r'\b今天\b', r'\b昨天\b'
+        r'\bthis week\b', r'\blast week\b', r'\bnext week\b',
+        r'\bthis month\b', r'\bthis quarter\b', r'\bthis year\b',
+        r'\b本周\b', r'\b本月\b', r'\b本季度\b', r'\b本周\b'
     ]
     
-    def extract_features(self, text: str) -> SemanticFeatures:
-        """Extract semantic features from user request.
-        
-        Uses pattern matching and rule-based classification instead of
-        simple keyword matching.
+    # 数据源模式
+    DATA_SOURCE_PATTERNS = {
+        'api': [r'api', r'接口', r'rest', r'http'],
+        'database': [r'database', r'db', r'data source', r'数据库'],
+        'web': [r'website', r'web', r'url', r'网页', r'爬取', r'scrape'],
+        'file': [r'file', r'document', r'csv', r'json', r'excel', r'文件'],
+    }
+    
+    # 输出格式模式
+    OUTPUT_FORMAT_PATTERNS = {
+        'markdown': [r'markdown', r'md', r'report', r'报告', r'文档'],
+        'table': [r'table', r'表格', r'csv', r'excel'],
+        'chart': [r'chart', r'graph', r'plot', r'图表', r'可视化'],
+        'json': [r'json', r'api response', r'json格式'],
+        'pdf': [r'pdf'],
+    }
+    
+    def analyze(self, text: str) -> SemanticFeatures:
         """
+        分析文本并返回语义特征
+        
+        Args:
+            text: 用户输入的文本
+        
+        Returns:
+            SemanticFeatures 对象，包含分析得到的特征
+        """
+        # 预处理：转小写，分词
         text_lower = text.lower()
         words = set(re.findall(r'\b\w+\b', text_lower))
         
+        # 初始化特征对象
         features = SemanticFeatures()
         
-        # 1. Classify primary intent based on action verbs
+        # 1. 基于动作动词分类意图
         self._classify_intent(words, text_lower, features)
         
-        # 2. Extract action verbs and object nouns
+        # 2. 提取动作模式
         self._extract_action_patterns(words, features)
         
-        # 3. Detect context indicators
+        # 3. 检测上下文标识
         self._detect_context(text, text_lower, features)
         
-        # 4. Identify data sources
+        # 4. 识别数据来源
         self._identify_data_sources(text_lower, features)
         
-        # 5. Determine output format
+        # 5. 确定输出格式
         self._determine_output_format(text_lower, features)
         
-        # 6. Assess complexity
+        # 6. 评估复杂度
         self._assess_complexity(words, text, features)
         
         return features
@@ -176,44 +239,42 @@ class SemanticAnalyzer:
         text: str,
         features: SemanticFeatures
     ):
-        """Classify intent based on action verb analysis."""
-        # Count verb matches for each intent type
+        """基于动作动词分析分类意图"""
         intent_scores = {}
         
-        # Inquiry intent
-        inquiry_count = len(words & ActionVerb.INQUIRE_VERBS)
+        # 查询意图
+        inquiry_count = len(words & self.ActionVerb.INQUIRE_VERBS)
         intent_scores[IntentType.INQUIRE] = inquiry_count
         
-        # Manipulation intent
-        manip_count = len(words & ActionVerb.MANIPULATE_VERBS)
+        # 操作意图
+        manip_count = len(words & self.ActionVerb.MANIPULATE_VERBS)
         intent_scores[IntentType.MANIPULATE] = manip_count
         
-        # Analysis intent
-        analyze_count = len(words & ActionVerb.ANALYZE_VERBS)
+        # 分析意图
+        analyze_count = len(words & self.ActionVerb.ANALYZE_VERBS)
         intent_scores[IntentType.ANALYZE] = analyze_count
         
-        # Report intent
-        report_count = len(words & ActionVerb.REPORT_VERBS)
+        # 报告意图
+        report_count = len(words & self.ActionVerb.REPORT_VERBS)
         intent_scores[IntentType.REPORT] = report_count
         
-        # Communication intent
-        comm_count = len(words & ActionVerb.COMMUNICATE_VERBS)
+        # 沟通意图
+        comm_count = len(words & self.ActionVerb.COMMUNICATE_VERBS)
         intent_scores[IntentType.COMMUNICATE] = comm_count
         
-        # Determine primary intent (highest score, with tie-breaker rules)
+        # 确定主要意图（得分最高）
         if intent_scores:
             max_score = max(intent_scores.values())
             if max_score > 0:
-                # Use tie-breaker: prefer more specific intents
-                for intent in [IntentType.REPORT, IntentType.ANALYZE, 
+                # 优先级：REPORT > ANALYZE > MANIPULATE > COMMUNICATE > INQUIRE
+                for intent in [IntentType.REPORT, IntentType.ANALYZE,
                               IntentType.MANIPULATE, IntentType.COMMUNICATE, IntentType.INQUIRE]:
                     if intent_scores.get(intent, 0) == max_score:
                         features.primary_intent = intent
                         break
         
-        # Check for multi-intent (e.g., "analyze and report")
+        # 检查多意图（如 "analyze and report"）
         if 'and' in words or '&' in text:
-            # Find second highest intent
             sorted_intents = sorted(intent_scores.items(), key=lambda x: -x[1])
             if len(sorted_intents) >= 2 and sorted_intents[1][1] > 0:
                 features.secondary_intent = sorted_intents[1][0]
@@ -223,17 +284,21 @@ class SemanticAnalyzer:
         words: set[str],
         features: SemanticFeatures
     ):
-        """Extract action verbs and object nouns."""
-        # Action verbs
-        all_action_verbs = (ActionVerb.INQUIRE_VERBS | ActionVerb.MANIPULATE_VERBS |
-                           ActionVerb.ANALYZE_VERBS | ActionVerb.REPORT_VERBS |
-                           ActionVerb.COMMUNICATE_VERBS)
+        """提取动作动词和对象名词"""
+        all_action_verbs = (
+            self.ActionVerb.INQUIRE_VERBS |
+            self.ActionVerb.MANIPULATE_VERBS |
+            self.ActionVerb.ANALYZE_VERBS |
+            self.ActionVerb.REPORT_VERBS |
+            self.ActionVerb.COMMUNICATE_VERBS
+        )
         features.action_verbs = list(words & all_action_verbs)
         
-        # Object nouns (common business objects)
+        # 业务对象名词
         business_objects = {
             'order', 'customer', 'sales', 'report', 'data', 'chart',
-            'document', 'email', 'invoice', 'payment', 'product', 'user'
+            'document', 'email', 'invoice', 'payment', 'product', 'user',
+            '订单', '客户', '销售', '报告', '数据', '文档'
         }
         features.object_nouns = list(words & business_objects)
     
@@ -243,26 +308,27 @@ class SemanticAnalyzer:
         text_lower: str,
         features: SemanticFeatures
     ):
-        """Detect context indicators."""
-        # Urgency
+        """检测上下文标识"""
+        # 紧迫性
         features.has_urgency = any(
             re.search(pattern, text_lower) for pattern in self.URGENCY_PATTERNS
         )
         
-        # Time reference
+        # 时间参考
         features.has_time_reference = any(
             re.search(pattern, text_lower) for pattern in self.TIME_PATTERNS
         )
         
-        # Quantity indicators
+        # 数量指标
         quantity_patterns = [r'\d+', r'\b(sum|total|count|average|max|min)\b']
         features.has_quantity = any(
             re.search(pattern, text_lower) for pattern in quantity_patterns
         )
         
-        # Quality requirements
+        # 质量要求
         word_set = set(text_lower.split())
-        quality_words = {'accuracy', 'precision', 'detailed', 'complete', 'thorough'}
+        quality_words = {'accuracy', 'precision', 'detailed', 'complete', 'thorough',
+                        '准确', '详细', '完整'}
         features.has_quality_requirement = bool(word_set & quality_words)
     
     def _identify_data_sources(
@@ -270,12 +336,12 @@ class SemanticAnalyzer:
         text: str,
         features: SemanticFeatures
     ):
-        """Identify data sources from patterns."""
+        """识别数据来源"""
         for source_type, patterns in self.DATA_SOURCE_PATTERNS.items():
             if any(re.search(p, text) for p in patterns):
                 features.data_sources.append(source_type)
         
-        # Default to API if no source detected
+        # 默认使用 API
         if not features.data_sources:
             features.data_sources.append('api')
     
@@ -284,13 +350,13 @@ class SemanticAnalyzer:
         text: str,
         features: SemanticFeatures
     ):
-        """Determine expected output format."""
+        """确定输出格式"""
         for format_type, patterns in self.OUTPUT_FORMAT_PATTERNS.items():
             if any(re.search(p, text) for p in patterns):
                 features.output_format = format_type
                 break
         
-        # Default format
+        # 默认格式
         if not features.output_format:
             features.output_format = 'markdown'
     
@@ -300,60 +366,71 @@ class SemanticAnalyzer:
         text: str,
         features: SemanticFeatures
     ):
-        """Assess task complexity using contextual inference."""
-        # Multi-step indicators
-        multi_step_words = {'and', 'then', 'also', 'plus', 'after', 'before', 'first', 'next'}
+        """评估任务复杂度"""
+        # 多步骤标识
+        multi_step_words = {'and', 'then', 'also', 'plus', 'after', 'before', 'first', 'next',
+                           '然后', '并且', '接下来', '首先'}
         features.is_multi_step = bool(words & multi_step_words) or len(words) > 15
         
-        # Aggregation indicators (explicit)
-        agg_words = {'sum', 'total', 'average', 'count', 'aggregate', 'summarize'}
+        # 聚合需求（显式）
+        agg_words = {'sum', 'total', 'average', 'count', 'aggregate', 'summarize',
+                    '统计', '汇总', '求和', '平均'}
         explicit_agg = bool(words & agg_words)
         
-        # Aggregation indicators (inferred from intent/context)
-        # Report types that typically need aggregation
-        report_types_needing_agg = {'sales', 'revenue', 'performance', 'summary', 'weekly', 'monthly', 'quarterly', 'annual'}
-        inferred_agg = bool(words & report_types_needing_agg) and features.primary_intent in {'report', 'analyze'}
+        # 聚合需求（隐式推断）
+        report_types_needing_agg = {
+            'sales', 'revenue', 'performance', 'summary',
+            'weekly', 'monthly', 'quarterly', 'annual',
+            '销售', '收入', '每周', '每月', '季度', '年度'
+        }
+        inferred_agg = bool(words & report_types_needing_agg) and \
+                       features.primary_intent in {IntentType.REPORT, IntentType.ANALYZE}
         
-        # Visualization indicators (explicit)
-        viz_words = {'chart', 'graph', 'plot', 'visual', 'pie', 'bar', 'line'}
+        # 可视化需求（显式）
+        viz_words = {'chart', 'graph', 'plot', 'visual', 'pie', 'bar', 'line',
+                    '图表', '图形', '可视化'}
         explicit_viz = bool(words & viz_words)
         
-        # Visualization indicators (inferred)
-        # Reports often include charts
-        inferred_viz = features.primary_intent == 'report' and explicit_agg
+        # 可视化需求（隐式推断）
+        inferred_viz = features.primary_intent == IntentType.REPORT and explicit_agg
         
         features.requires_aggregation = explicit_agg or inferred_agg
         features.requires_visualization = explicit_viz or inferred_viz
         
-        # Collaboration indicators
-        collab_words = {'email', 'send', 'notify', 'share', 'team', 'colleague'}
+        # 协作需求
+        collab_words = {'email', 'send', 'notify', 'share', 'team', 'colleague',
+                        '邮件', '发送', '通知', '团队'}
         features.requires_collaboration = bool(words & collab_words)
 
 
 # ============================================================================
-# Task Capability Mapping (Rule-based, not keyword matching)
+# 能力映射器
 # ============================================================================
 
 class CapabilityMapper:
-    """Maps semantic features to required capabilities.
+    """
+    能力映射器 - 将语义特征映射到所需能力
     
-    Uses decision rules instead of keyword matching.
+    【映射规则】
+    1. 主要意图决定基础能力
+    2. 辅助特征添加额外能力
+    3. 数据来源影响能力选择
     """
     
     def map_to_capabilities(self, features: SemanticFeatures) -> list[str]:
-        """Map semantic features to required capabilities.
-        
-        Decision rules:
-        1. Primary intent determines base capability
-        2. Secondary features add additional capabilities
-        3. Output format may add visualization/reporting
         """
-        from .base import AgentCapability
+        将语义特征映射到能力列表
         
+        Args:
+            features: 语义特征
+        
+        Returns:
+            所需能力的字符串列表
+        """
         capabilities = []
         capability_set = set()
         
-        # 1. Map primary intent to base capability
+        # 1. 基于主要意图映射基础能力
         intent_capability_map = {
             IntentType.INQUIRE: [
                 AgentCapability.API_CALL,
@@ -384,7 +461,7 @@ class CapabilityMapper:
                 capabilities.append(cap.value)
                 capability_set.add(cap.value)
         
-        # 2. Add capabilities based on features
+        # 2. 基于辅助特征添加能力
         if features.requires_aggregation and AgentCapability.DATA_AGGREGATE.value not in capability_set:
             capabilities.append(AgentCapability.DATA_AGGREGATE.value)
             capability_set.add(AgentCapability.DATA_AGGREGATE.value)
@@ -392,13 +469,13 @@ class CapabilityMapper:
         if features.requires_visualization and AgentCapability.CHART_CREATE.value not in capability_set:
             capabilities.append(AgentCapability.CHART_CREATE.value)
         
-        if features.output_format in ['table'] and AgentCapability.TABLE_CREATE.value not in capability_set:
+        if features.output_format == 'table' and AgentCapability.TABLE_CREATE.value not in capability_set:
             capabilities.append(AgentCapability.TABLE_CREATE.value)
         
         if features.requires_collaboration and AgentCapability.EMAIL_SEND.value not in capability_set:
             capabilities.append(AgentCapability.EMAIL_SEND.value)
         
-        # 3. Add data source capabilities
+        # 3. 添加数据源能力
         for source in features.data_sources:
             source_capability_map = {
                 'api': AgentCapability.API_CALL,
@@ -414,11 +491,19 @@ class CapabilityMapper:
 
 
 # ============================================================================
-# Task Plan Generator
+# 任务计划生成器
 # ============================================================================
 
 class TaskPlanGenerator:
-    """Generates structured task plans from semantic features."""
+    """
+    任务计划生成器 - 根据语义特征生成任务列表
+    
+    【生成流程】
+    1. 确定任务序列
+    2. 创建任务对象
+    3. 设置依赖关系
+    4. 添加聚合/报告任务
+    """
     
     def __init__(self):
         self.capability_mapper = CapabilityMapper()
@@ -428,20 +513,23 @@ class TaskPlanGenerator:
         features: SemanticFeatures,
         user_request: str
     ) -> list[dict[str, Any]]:
-        """Generate task list from semantic features.
-        
-        Instead of keyword matching, uses semantic understanding
-        to determine task sequence and dependencies.
         """
-        from .base import TaskPriority, AgentCapability
+        生成任务列表
         
+        Args:
+            features: 语义特征
+            user_request: 原始用户请求
+        
+        Returns:
+            任务定义字典列表
+        """
         tasks = []
-        task_counter = [1]  # Mutable counter
+        task_counter = [1]
         
-        # 1. Determine task sequence based on intent
+        # 1. 确定任务序列
         task_sequence = self._determine_task_sequence(features)
         
-        # 2. Generate tasks with proper parameters
+        # 2. 生成任务
         for task_def in task_sequence:
             task = self._create_task(
                 task_def,
@@ -452,13 +540,13 @@ class TaskPlanGenerator:
             if task:
                 tasks.append(task)
         
-        # 3. Add final aggregation task if needed
+        # 3. 添加聚合任务（如果需要）
         if features.requires_aggregation and len(tasks) > 1:
             agg_task = self._create_aggregation_task(features, tasks, task_counter)
             if agg_task:
                 tasks.append(agg_task)
         
-        # 4. Add report task if output format is report-like
+        # 4. 添加报告任务（如果需要）
         if features.output_format in ['markdown', 'pdf'] or features.primary_intent == IntentType.REPORT:
             report_task = self._create_report_task(features, tasks, task_counter)
             if report_task:
@@ -467,48 +555,41 @@ class TaskPlanGenerator:
         return tasks
     
     def _determine_task_sequence(self, features: SemanticFeatures) -> list[dict]:
-        """Determine task sequence based on intent and features."""
-        from .base import AgentCapability
-        
+        """确定任务序列"""
         sequence = []
         
-        # Data collection phase - reports also need data!
-        # Any intent that requires external data should collect first
+        # 数据收集阶段 - 报告类也需要先收集数据
         if features.primary_intent in [IntentType.INQUIRE, IntentType.ANALYZE, IntentType.REPORT]:
-            # Add data source tasks first
             for source in features.data_sources:
                 if source == 'api':
                     sequence.append({'capability': AgentCapability.API_CALL, 'phase': 'collect'})
                 elif source == 'web':
-                    # For web scraping, we need two tasks:
-                    # 1. Navigate to the website (URL comes from database query)
-                    # 2. Scrape content from the loaded page
                     sequence.append({'capability': AgentCapability.BROWSER_NAVIGATE, 'phase': 'collect'})
                     sequence.append({'capability': AgentCapability.BROWSER_SCRAPE, 'phase': 'collect'})
                 elif source == 'database':
                     sequence.append({'capability': AgentCapability.DATA_QUERY, 'phase': 'collect'})
         
-        # Processing phase
+        # 处理阶段
         if features.primary_intent == IntentType.ANALYZE:
             sequence.append({'capability': AgentCapability.DATA_TRANSFORM, 'phase': 'process'})
             if features.requires_aggregation:
                 sequence.append({'capability': AgentCapability.DATA_AGGREGATE, 'phase': 'process'})
         
-        # Visualization phase
+        # 可视化阶段
         if features.requires_visualization:
             sequence.append({'capability': AgentCapability.CHART_CREATE, 'phase': 'visualize'})
         
-        # Output phase
+        # 输出阶段
         if features.output_format == 'table':
             sequence.append({'capability': AgentCapability.TABLE_CREATE, 'phase': 'output'})
         elif features.primary_intent == IntentType.REPORT:
             sequence.append({'capability': AgentCapability.REPORT_GENERATE, 'phase': 'output'})
         
-        # Communication phase
+        # 沟通阶段
         if features.requires_collaboration:
             sequence.append({'capability': AgentCapability.EMAIL_SEND, 'phase': 'communicate'})
         
-        # Default task if no sequence determined
+        # 默认任务
         if not sequence:
             sequence.append({'capability': AgentCapability.API_CALL, 'phase': 'default'})
         
@@ -521,12 +602,10 @@ class TaskPlanGenerator:
         user_request: str,
         task_counter: list[int]
     ) -> dict[str, Any] | None:
-        """Create a single task with parameters."""
-        from .base import TaskPriority, AgentCapability, create_task_id
-        
+        """创建单个任务"""
         capability = task_def['capability']
         
-        # Generate task description based on capability and context
+        # 任务描述模板
         descriptions = {
             AgentCapability.API_CALL: f"Call API to retrieve {', '.join(features.data_sources) if features.data_sources else 'data'}",
             AgentCapability.BROWSER_SCRAPE: "Navigate to and scrape data from web source",
@@ -542,7 +621,7 @@ class TaskPlanGenerator:
         task_id = f"task_{task_counter[0]:03d}"
         task_counter[0] += 1
         
-        # Determine priority
+        # 确定优先级
         priority = TaskPriority.MEDIUM
         if features.has_urgency:
             priority = TaskPriority.URGENT
@@ -551,190 +630,49 @@ class TaskPlanGenerator:
         
         return {
             'id': task_id,
-            'description': descriptions.get(capability, "Execute task"),
-            'capability_required': capability,
+            'description': descriptions.get(capability, f"Execute {capability.value}"),
+            'capability': capability,
             'priority': priority,
-            'depends_on': [],
-            'expected_output': self._get_expected_output(capability, features),
-            'input_data': self._get_input_data(capability, features, user_request),
+            'phase': task_def['phase'],
         }
     
     def _create_aggregation_task(
         self,
         features: SemanticFeatures,
-        existing_tasks: list,
+        tasks: list[dict],
         task_counter: list[int]
     ) -> dict | None:
-        """Create aggregation task."""
-        from .base import AgentCapability
-        
+        """创建聚合任务"""
         task_id = f"task_{task_counter[0]:03d}"
         task_counter[0] += 1
         
         return {
             'id': task_id,
-            'description': "Aggregate and summarize collected data",
-            'capability_required': AgentCapability.DATA_AGGREGATE,
-            'priority': existing_tasks[-1]['priority'] if existing_tasks else TaskPriority.MEDIUM,
-            'depends_on': [t['id'] for t in existing_tasks if t['capability_required'] != AgentCapability.DATA_AGGREGATE],
-            'expected_output': "Aggregated statistics and trends",
-            'input_data': {},
+            'description': 'Aggregate data from previous tasks',
+            'capability': AgentCapability.DATA_AGGREGATE,
+            'priority': TaskPriority.MEDIUM,
+            'depends_on': [t['id'] for t in tasks if t.get('phase') == 'collect'],
+            'phase': 'aggregate',
         }
     
     def _create_report_task(
         self,
         features: SemanticFeatures,
-        existing_tasks: list,
+        tasks: list[dict],
         task_counter: list[int]
     ) -> dict | None:
-        """Create report generation task."""
-        from .base import AgentCapability, TaskPriority
-        
-        # Avoid duplicate report task
-        if any(t['capability_required'] == AgentCapability.REPORT_GENERATE for t in existing_tasks):
-            return None
-        
+        """创建报告任务"""
         task_id = f"task_{task_counter[0]:03d}"
         task_counter[0] += 1
         
         return {
             'id': task_id,
-            'description': f"Generate final {features.output_format or 'report'} report",
-            'capability_required': AgentCapability.REPORT_GENERATE,
+            'description': f"Generate {features.output_format} report",
+            'capability': AgentCapability.REPORT_GENERATE,
             'priority': TaskPriority.HIGH,
-            'depends_on': [t['id'] for t in existing_tasks if t['capability_required'] != AgentCapability.REPORT_GENERATE],
-            'expected_output': f"Formatted {features.output_format or 'markdown'} report",
-            'input_data': {'title': features.object_nouns[0].title() if features.object_nouns else 'Report'},
+            'depends_on': [t['id'] for t in tasks],
+            'phase': 'report',
         }
-    
-    def _get_expected_output(self, capability: AgentCapability, features: SemanticFeatures) -> str:
-        """Get expected output description."""
-        outputs = {
-            AgentCapability.API_CALL: "API response with data",
-            AgentCapability.BROWSER_SCRAPE: "Extracted web content",
-            AgentCapability.DATA_QUERY: "Queried data records",
-            AgentCapability.DATA_TRANSFORM: "Transformed data",
-            AgentCapability.DATA_AGGREGATE: "Aggregated statistics",
-            AgentCapability.CHART_CREATE: f"{features.output_format or 'chart'} visualization",
-            AgentCapability.TABLE_CREATE: "Formatted data table",
-            AgentCapability.REPORT_GENERATE: f"Generated {features.output_format or 'report'}",
-            AgentCapability.EMAIL_SEND: "Email sent confirmation",
-        }
-        return outputs.get(capability, "Task completed")
-    
-    def _get_input_data(
-        self,
-        capability: AgentCapability,
-        features: SemanticFeatures,
-        user_request: str
-    ) -> dict[str, Any]:
-        """Get input data for task."""
-        data = {}
-        
-        # Set defaults based on capability
-        if capability == AgentCapability.API_CALL:
-            data['endpoint'] = '/api/data'
-            data['method'] = 'GET'
-        elif capability == AgentCapability.BROWSER_SCRAPE:
-            data['url'] = 'https://www.example.com'
-        elif capability == AgentCapability.DATA_QUERY:
-            data['table'] = 'data'
-        elif capability == AgentCapability.CHART_CREATE:
-            data['chart_type'] = 'bar'
-            data['title'] = features.object_nouns[0].title() if features.object_nouns else 'Chart'
-        elif capability == AgentCapability.REPORT_GENERATE:
-            data['title'] = features.object_nouns[0].title() if features.object_nouns else 'Report'
-            data['format'] = features.output_format or 'markdown'
-        
-        return data
-
-
-# ============================================================================
-# Reasoning Model (Replaces keyword matching with structured reasoning)
-# ============================================================================
-
-@dataclass
-class ReasoningStep:
-    """A step in the structured reasoning process."""
-    step_number: int
-    thought: str
-    observation: str
-    conclusion: str
-
-
-class MockReasoningModel:
-    """Mock high-level reasoning model for task planning.
-    
-    Uses structured semantic analysis instead of keyword matching.
-    Simulates reasoning model (like o1) behavior.
-    """
-    
-    def __init__(self):
-        self.semantic_analyzer = SemanticAnalyzer()
-        self.capability_mapper = CapabilityMapper()
-        self.task_generator = TaskPlanGenerator()
-    
-    def reason(self, user_request: str) -> tuple[list[ReasoningStep], list[dict]]:
-        """Perform structured reasoning on user request.
-        
-        Returns:
-            Tuple of (reasoning_steps, generated_tasks)
-        """
-        reasoning_steps = []
-        
-        # Step 1: Parse and understand request
-        step1 = ReasoningStep(
-            step_number=1,
-            thought=f"Analyzing request: '{user_request}'",
-            observation="Breaking down the request into semantic components",
-            conclusion="Request parsed successfully"
-        )
-        reasoning_steps.append(step1)
-        
-        # Step 2: Extract semantic features
-        features = self.semantic_analyzer.extract_features(user_request)
-        step2 = ReasoningStep(
-            step_number=2,
-            thought=f"Intent classification: {features.primary_intent}",
-            observation=f"Features: aggregation={features.requires_aggregation}, "
-                       f"visualization={features.requires_visualization}, "
-                       f"output_format={features.output_format}",
-            conclusion=f"Primary intent identified as {features.primary_intent}"
-        )
-        reasoning_steps.append(step2)
-        
-        # Step 3: Determine required capabilities
-        capabilities = self.capability_mapper.map_to_capabilities(features)
-        step3 = ReasoningStep(
-            step_number=3,
-            thought=f"Required capabilities: {capabilities}",
-            observation=f"Action verbs: {features.action_verbs}, "
-                       f"Data sources: {features.data_sources}",
-            conclusion=f"Mapped to {len(capabilities)} capabilities"
-        )
-        reasoning_steps.append(step3)
-        
-        # Step 4: Generate task plan
-        tasks = self.task_generator.generate_tasks(features, user_request)
-        step4 = ReasoningStep(
-            step_number=4,
-            thought=f"Generated {len(tasks)} tasks",
-            observation=f"Task sequence determined by intent phase ordering",
-            conclusion="Task plan generated successfully"
-        )
-        reasoning_steps.append(step4)
-        
-        # Step 5: Analyze dependencies
-        task_ids = [t['id'] for t in tasks]
-        step5 = ReasoningStep(
-            step_number=5,
-            thought=f"Task IDs: {task_ids}",
-            observation="Dependencies analyzed based on data flow",
-            conclusion="Execution order optimized"
-        )
-        reasoning_steps.append(step5)
-        
-        return reasoning_steps, tasks
 
 
 # ============================================================================
@@ -742,93 +680,161 @@ class MockReasoningModel:
 # ============================================================================
 
 class PlannerAgent:
-    """Planner Agent that generates task plans.
+    """
+    Planner Agent - 主规划器
     
-    Uses structured semantic reasoning instead of keyword matching.
+    协调语义分析、能力映射和任务生成，
+    输出完整的任务计划。
     """
     
-    def __init__(self, reasoning_model: MockReasoningModel | None = None):
-        self.reasoning_model = reasoning_model or MockReasoningModel()
+    def __init__(self):
+        self.analyzer = SemanticAnalyzer()
+        self.capability_mapper = CapabilityMapper()
+        self.task_generator = TaskPlanGenerator()
     
     def create_plan(
         self,
         user_request: str,
         context: dict[str, Any] | None = None
-    ) -> tuple[dict, list[ReasoningStep]]:
-        """Create a task plan from user request.
+    ) -> tuple[TaskPlan, list[str]]:
+        """
+        创建任务计划
         
         Args:
-            user_request: The user's request
-            context: Optional context (user info, available tools, etc.)
+            user_request: 用户请求
+            context: 额外上下文
         
         Returns:
-            Tuple of (TaskPlan dict, ReasoningSteps list)
+            (TaskPlan, reasoning_steps) 元组
         """
-        from .base import TaskPlan, TaskPriority, AgentCapability, create_task_id
+        reasoning_steps = []
         
-        # Perform structured reasoning
-        reasoning_steps, task_dicts = self.reasoning_model.reason(user_request)
+        # 1. 语义分析
+        features = self.analyzer.analyze(user_request)
+        reasoning_steps.append(f"Intent: {features.primary_intent.value}")
+        reasoning_steps.append(f"Data sources: {features.data_sources}")
+        reasoning_steps.append(f"Output format: {features.output_format}")
         
-        # Convert task dicts to Task objects
+        # 2. 能力映射
+        capabilities = self.capability_mapper.map_to_capabilities(features)
+        reasoning_steps.append(f"Capabilities: {capabilities}")
+        
+        # 3. 生成任务
+        task_defs = self.task_generator.generate_tasks(features, user_request)
+        
+        # 4. 创建任务对象
         tasks = []
-        for task_dict in task_dicts:
-            # Get priority from dict or default
-            priority = task_dict.get('priority', TaskPriority.MEDIUM)
-            if isinstance(priority, str):
-                priority = TaskPriority(priority)
-            
+        task_id_map = {}
+        
+        for task_def in task_defs:
             task = Task(
-                id=task_dict['id'],
-                description=task_dict['description'],
-                capability_required=task_dict['capability_required'],
-                expected_output=task_dict.get('expected_output', 'Task completed'),
-                priority=priority,
-                depends_on=task_dict.get('depends_on', []),
-                input_data=task_dict.get('input_data', {}),
+                id=task_def['id'],
+                description=task_def['description'],
+                capability_required=task_def['capability'].value,
+                priority=task_def.get('priority', TaskPriority.MEDIUM),
+                depends_on=task_def.get('depends_on', []),
             )
             tasks.append(task)
+            task_id_map[task_def['id']] = task
         
-        # Create TaskPlan
-        task_plan = TaskPlan(
-            id=create_task_id("plan"),
+        # 更新依赖引用
+        for task in tasks:
+            task.depends_on = [
+                task_id_map[dep_id].id
+                for dep_id in task.depends_on
+                if dep_id in task_id_map
+            ]
+        
+        # 5. 创建计划
+        plan = TaskPlan(
+            id=f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             user_request=user_request,
             tasks=tasks,
-            metadata={'reasoning_steps': reasoning_steps}
+            context=context or {},
         )
         
-        return task_plan, reasoning_steps
-    
-    def explain_plan(self, plan: dict) -> str:
-        """Generate human-readable explanation of the plan."""
-        tasks = plan.tasks if hasattr(plan, 'tasks') else plan.get('tasks', [])
-        reasoning_steps = plan.metadata.get('reasoning_steps', []) if hasattr(plan, 'metadata') else plan.get('metadata', {}).get('reasoning_steps', [])
+        reasoning_steps.append(f"Total tasks: {len(tasks)}")
         
+        return plan, reasoning_steps
+    
+    def explain_plan(self, plan: TaskPlan) -> str:
+        """解释任务计划"""
         lines = [
-            f"## Task Plan: {plan.id}",
-            f"**User Request**: {plan.user_request}",
+            f"Task Plan: {plan.id}",
+            f"User Request: {plan.user_request}",
             "",
-            "### Reasoning Process:",
+            "Tasks:",
         ]
         
-        for step in reasoning_steps:
-            lines.append(f"{step.step_number}. **{step.thought}**")
-            lines.append(f"   - Observation: {step.observation}")
-            lines.append(f"   - Conclusion: {step.conclusion}")
-            lines.append("")
-        
-        lines.extend(["### Tasks:", ""])
-        
-        for i, task in enumerate(tasks, 1):
+        for task in plan.tasks:
             deps = f" (depends on: {', '.join(task.depends_on)})" if task.depends_on else ""
-            lines.append(f"{i}. [{task.priority.value.upper()}] {task.description}{deps}")
-            lines.append(f"   - Capability: {task.capability_required.value}")
-            lines.append(f"   - Expected: {task.expected_output}")
-            lines.append("")
-        
-        lines.extend([
-            "### Execution Summary:",
-            f"- Total Tasks: {len(tasks)}",
-            f"- Expected Duration: ~{len(tasks) * 2} minutes",
-        ])
+            lines.append(f"  {task.id}: {task.description} [{task.capability_required}]{deps}")
         
         return "\n".join(lines)
+
+
+# ============================================================================
+# Mock 推理模型
+# ============================================================================
+
+class MockReasoningModel:
+    """
+    Mock 推理模型 - 模拟高级推理模型的思考过程
+    
+    用于在没有真实 LLM 的情况下展示推理步骤。
+    """
+    
+    def __init__(self):
+        self.analyzer = SemanticAnalyzer()
+    
+    def reason(
+        self,
+        user_request: str
+    ) -> tuple[SemanticFeatures, list[str]]:
+        """
+        执行推理
+        
+        Args:
+            user_request: 用户请求
+        
+        Returns:
+            (features, reasoning_steps) 元组
+        """
+        features = self.analyzer.analyze(user_request)
+        
+        reasoning = [
+            "Step 1: Analyzing user request...",
+            f"  - Primary intent: {features.primary_intent.value}",
+            f"  - Data sources: {features.data_sources}",
+            f"  - Output format: {features.output_format}",
+            "",
+            "Step 2: Assessing complexity...",
+            f"  - Multi-step: {features.is_multi_step}",
+            f"  - Requires aggregation: {features.requires_aggregation}",
+            f"  - Requires visualization: {features.requires_visualization}",
+            "",
+            "Step 3: Determining capabilities...",
+        ]
+        
+        capability_mapper = CapabilityMapper()
+        capabilities = capability_mapper.map_to_capabilities(features)
+        
+        for cap in capabilities:
+            reasoning.append(f"  - {cap}")
+        
+        return features, reasoning
+
+
+# ============================================================================
+# 导出
+# ============================================================================
+
+__all__ = [
+    "IntentType",
+    "SemanticFeatures",
+    "SemanticAnalyzer",
+    "CapabilityMapper",
+    "TaskPlanGenerator",
+    "PlannerAgent",
+    "MockReasoningModel",
+]

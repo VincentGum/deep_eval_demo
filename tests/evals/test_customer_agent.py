@@ -139,17 +139,17 @@ class IntentAccuracyMetric(BaseMetric):
         success = any(kw.lower() in actual_output.lower() for kw in keywords)
 
         if success:
-            self.error = None
+            self.score = 1.0
             self.reason = f"Intent '{expected_intent}' correctly identified"
             return 1.0
         else:
-            self.error = f"Intent '{expected_intent}' not identified in output"
-            self.reason = self.error
+            self.score = 0.0
+            self.reason = f"Intent '{expected_intent}' not identified in output"
             return 0.0
 
     def is_successful(self) -> bool:
-        """Return True if the last evaluation passed."""
-        return self.error is None
+        """Return True if the last evaluation passed (score >= threshold)."""
+        return self.score is not None and self.score >= self.threshold
 
 
 class ToolSelectionMetric(BaseMetric):
@@ -185,10 +185,10 @@ class ToolSelectionMetric(BaseMetric):
             # No tools expected - check output doesn't contain tool call traces
             tool_traces = ["look up your order", "created case", "refund case", "工单已创建"]
             if any(trace in actual_output for trace in tool_traces):
-                self.error = "Unexpected tool usage when no tools expected"
-                self.reason = self.error
+                self.score = 0.0
+                self.reason = "Unexpected tool usage when no tools expected"
                 return 0.0
-            self.error = None
+            self.score = 1.0
             self.reason = "No tools required, agent correctly handled without tools"
             return 1.0
 
@@ -215,17 +215,17 @@ class ToolSelectionMetric(BaseMetric):
                 break
 
         if all_present:
-            self.error = None
+            self.score = 1.0
             self.reason = f"Correct tools selected: {expected_tools_list}"
             return 1.0
         else:
-            self.error = f"Missing tools. Expected: {expected_tools_list}"
-            self.reason = self.error
+            self.score = 0.0
+            self.reason = f"Missing tools. Expected: {expected_tools_list}"
             return 0.0
 
     def is_successful(self) -> bool:
-        """Return True if the last evaluation passed."""
-        return self.error is None
+        """Return True if the last evaluation passed (score >= threshold)."""
+        return self.score is not None and self.score >= self.threshold
 
 
 class HumanReviewDecisionMetric(BaseMetric):
@@ -289,18 +289,18 @@ class HumanReviewDecisionMetric(BaseMetric):
         success = human_review_triggered == expected_review_flag
 
         if success:
-            self.error = None
+            self.score = 1.0
             action = "triggered" if human_review_triggered else "not triggered"
             self.reason = f"Human review decision correct: {action}"
             return 1.0
         else:
-            self.error = f"Human review mismatch: expected {expected_review_flag}, got {human_review_triggered}"
-            self.reason = self.error
+            self.score = 0.0
+            self.reason = f"Human review mismatch: expected {expected_review_flag}, got {human_review_triggered}"
             return 0.0
 
     def is_successful(self) -> bool:
-        """Return True if the last evaluation passed."""
-        return self.error is None
+        """Return True if the last evaluation passed (score >= threshold)."""
+        return self.score is not None and self.score >= self.threshold
 
 
 # =============================================================================
