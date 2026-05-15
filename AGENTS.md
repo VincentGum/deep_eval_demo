@@ -166,14 +166,14 @@ PYTHONPATH=src python3 examples/run_office_agent.py --interactive
 
 ### Customer Agent
 - **完成度**: 100%
-- **测试通过**: 19/19 (DeepEval 单元测试) + 30/30 (Golden Dataset)
-- **Golden Dataset**: 30 条测试数据，平均得分 100%
+- **测试通过**: 19/19 (DeepEval 单元测试) + Golden Dataset 离线评估
+- **Golden Dataset**: 测试数据覆盖多种意图场景
 - **DeepEval Metrics**: IntentAccuracy, ToolSelection, HumanReviewDecision
 
 ### Office Agent
 - **完成度**: 100%
-- **场景测试**: 3/3 通过
-- **DeepEval**: 暂未实现（按需求）
+- **测试通过**: 12/12 (DeepEval 评测)
+- **DeepEval Metrics**: TaskPlanningQuality, ExecutionAccuracy, OutputQuality, HumanLoopDecision
 
 ## EDD 开发模式 (Phase 1 完成)
 
@@ -206,3 +206,6 @@ PYTHONPATH=src python3 examples/run_office_agent.py --interactive
 - 缺少入口文件时项目无法运行
 - 运行时必须设置 `PYTHONPATH=src`
 - Office Agent 的 Human-in-the-Loop 需要用户提供输入才能继续
+- SemanticAnalyzer 的 `words` 已改为有序列表（修复了 set 无序导致意图分类不稳定的问题）
+- 动作动词检测使用优先级机制：refund > cancel > complaint > inquire（避免 "get" 等泛化动词抢占高优先级动作）
+- 测试 context 值必须与 Agent 实际行为一致（通过白盒推算验证，不可凭直觉设置）

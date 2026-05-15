@@ -1,0 +1,142 @@
+[
+  {
+    "id": "office_001",
+    "input": "生成本周销售报告，包括销售数据统计和趋势图表",
+    "context": ["weekly_report", "report", "false"],
+    "expected_workflow": ["api_fetch", "data_process", "visualize", "doc_write"],
+    "description": "生成周销售报告"
+  },
+  {
+    "id": "office_002",
+    "input": "帮我调研一下某科技公司的最新动态和财务状况",
+    "context": ["research", "report", "false"],
+    "expected_workflow": ["web_browse", "data_process", "report_write"],
+    "description": "客户调研任务"
+  },
+  {
+    "id": "office_003",
+    "input": "帮我准备明天的销售会议，需要整理本周的销售数据",
+    "context": ["meeting", "document", "false"],
+    "expected_workflow": ["data_query", "doc_format"],
+    "description": "会议准备工作"
+  },
+  {
+    "id": "office_004",
+    "input": "分析一下我们产品 A 和产品 B 的销售对比",
+    "context": ["analysis", "data", "false"],
+    "expected_workflow": ["data_process"],
+    "description": "数据分析任务"
+  },
+  {
+    "id": "office_005",
+    "input": "帮我写一份项目计划书，主要包括项目背景、目标和实施方案",
+    "context": ["document", "markdown", "false"],
+    "expected_workflow": ["doc_write"],
+    "description": "文档生成任务"
+  },
+  {
+    "id": "office_006",
+    "input": "帮我查一下今天科技新闻有哪些",
+    "context": ["browse", "data", "false"],
+    "expected_workflow": ["web_browse"],
+    "description": "网页浏览任务"
+  },
+  {
+    "id": "office_007",
+    "input": "获取一下当前天气信息",
+    "context": ["api_call", "data", "false"],
+    "expected_workflow": ["api_fetch"],
+    "description": "API 调用任务"
+  },
+  {
+    "id": "office_008",
+    "input": "根据以下销售数据生成一个柱状图：[1月:100, 2月:150, 3月:200]",
+    "context": ["chart", "visual", "false"],
+    "expected_workflow": ["visualize"],
+    "description": "图表生成任务"
+  },
+  {
+    "id": "office_009",
+    "input": "先获取最新的市场数据，对数据进行趋势分析，生成分析报告并附上图表",
+    "context": ["multi_step", "report", "false"],
+    "expected_workflow": ["api_fetch", "data_process", "report_write", "visualize"],
+    "description": "复杂多步骤任务"
+  },
+  {
+    "id": "office_010",
+    "input": "帮我整理一份竞品分析报告",
+    "context": ["research", "report", "false"],
+    "expected_workflow": ["web_browse", "data_process", "doc_write"],
+    "description": "竞品分析任务"
+  },
+  {
+    "id": "office_011",
+    "input": "生成一份月度工作总结模板",
+    "context": ["document", "markdown", "false"],
+    "expected_workflow": ["doc_write"],
+    "description": "模板生成任务"
+  },
+  {
+    "id": "office_012",
+    "input": "帮我查一下特斯拉股票今天的走势",
+    "context": ["browse", "data", "false"],
+    "expected_workflow": ["web_browse", "data_process"],
+    "description": "股票查询任务"
+  },
+  {
+    "id": "office_013",
+    "input": "生成一个展示用户增长趋势的折线图",
+    "context": ["chart", "visual", "false"],
+    "expected_workflow": ["visualize"],
+    "description": "图表生成任务"
+  },
+  {
+    "id": "office_014",
+    "input": "帮我整理一份会议纪要模板",
+    "context": ["document", "markdown", "false"],
+    "expected_workflow": ["doc_write"],
+    "description": "模板生成任务"
+  },
+  {
+    "id": "office_015",
+    "input": "分析一下本季度各区域的销售业绩",
+    "context": ["analysis", "data", "false"],
+    "expected_workflow": ["data_process", "visualize"],
+    "description": "销售分析任务"
+  },
+  {
+    "id": "office_016",
+    "input": "帮我搜索一下 AI 领域的最新论文",
+    "context": ["browse", "data", "false"],
+    "expected_workflow": ["web_browse"],
+    "description": "文献搜索任务"
+  },
+  {
+    "id": "office_017",
+    "input": "生成一份客户反馈分析报告",
+    "context": ["report", "document", "false"],
+    "expected_workflow": ["data_process", "doc_write", "visualize"],
+    "description": "客户反馈分析"
+  },
+  {
+    "id": "office_018",
+    "input": "帮我创建一个数据可视化仪表盘",
+    "context": ["chart", "visual", "false"],
+    "expected_workflow": ["data_process", "visualize"],
+    "description": "仪表盘生成任务"
+  },
+  {
+    "id": "office_019",
+    "input": "查询一下今天的汇率信息",
+    "context": ["api_call", "data", "false"],
+    "expected_workflow": ["api_fetch"],
+    "description": "汇率查询任务"
+  },
+  {
+    "id": "office_020",
+    "input": "帮我写一份产品需求文档 PRD",
+    "context": ["document", "markdown", "false"],
+    "expected_workflow": ["doc_write"],
+    "description": "PRD 文档生成"
+  }
+]

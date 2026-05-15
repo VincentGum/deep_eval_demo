@@ -192,8 +192,9 @@ class VisualizationAgent(BaseSubAgent):
     可视化 Agent - 生成数据可视化
     
     【能力列表】
-    - VISUALIZATION_GENERATE: 生成图表
-    - VISUALIZATION_FORMAT: 格式化数据
+    - CHART_CREATE: 创建图表
+    - TABLE_CREATE: 创建表格
+    - REPORT_GENERATE: 生成报告
     """
     
     def __init__(self):
@@ -206,8 +207,9 @@ class VisualizationAgent(BaseSubAgent):
     @property
     def capabilities(self) -> list[AgentCapability]:
         return [
-            AgentCapability.VISUALIZATION_GENERATE,
-            AgentCapability.VISUALIZATION_FORMAT,
+            AgentCapability.CHART_CREATE,
+            AgentCapability.TABLE_CREATE,
+            AgentCapability.REPORT_GENERATE,
         ]
     
     def can_handle(self, task: Task) -> bool:
@@ -222,18 +224,21 @@ class VisualizationAgent(BaseSubAgent):
         执行可视化任务
         
         【任务路由】
-        - VISUALIZATION_GENERATE → _generate()
-        - VISUALIZATION_FORMAT → _format()
+        - CHART_CREATE → _generate()
+        - TABLE_CREATE → _format()
+        - REPORT_GENERATE → _generate()
         """
         try:
             capability = task.capability_required
             if isinstance(capability, str):
                 capability = AgentCapability(capability)
             
-            if capability == AgentCapability.VISUALIZATION_GENERATE:
+            if capability == AgentCapability.CHART_CREATE:
                 return self._generate(task)
-            elif capability == AgentCapability.VISUALIZATION_FORMAT:
+            elif capability == AgentCapability.TABLE_CREATE:
                 return self._format(task)
+            elif capability == AgentCapability.REPORT_GENERATE:
+                return self._generate(task)
             else:
                 return ExecutionResult(
                     success=False,

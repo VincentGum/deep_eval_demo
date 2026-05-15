@@ -23,7 +23,6 @@ from .office_agent import (
     WorkflowProgress,
     WorkflowResult,
     invoke_office_agent,
-    build_office_agent_graph,
 )
 from .scenarios import (
     OfficeScenario,
@@ -57,7 +56,6 @@ __all__ = [
     "WorkflowResult",
     # Entry point
     "invoke_office_agent",
-    "build_office_agent_graph",
     # Scenarios
     "OfficeScenario",
     "WEEKLY_SALES_REPORT",

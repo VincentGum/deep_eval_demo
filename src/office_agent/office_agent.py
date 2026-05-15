@@ -453,4 +453,66 @@ __all__ = [
     "OfficeAgent",
     "create_office_agent",
     "run_office_task",
+    "invoke_office_agent",
 ]
+
+
+# =============================================================================
+# 便捷入口函数 (用于测试)
+# =============================================================================
+
+def invoke_office_agent(
+    user_request: str,
+    scenario: str = None,
+    human_input_func: Callable[[str], str] = None,
+    progress_callback: Callable[[WorkflowProgress], None] = None
+) -> dict[str, Any]:
+    """
+    Office Agent 便捷入口函数
+    
+    类似于 Customer Agent 的 invoke_customer_agent，用于 DeepEval 测试。
+    
+    【参数】
+        user_request: 用户请求
+        scenario: 场景名称（可选）
+        human_input_func: 人工输入函数
+        progress_callback: 进度回调函数
+    
+    【返回值】
+        {
+            "response": 最终输出文本,
+            "state": 执行状态信息,
+            "result": WorkflowResult 对象
+        }
+    """
+    # 创建进度收集器
+    progress_logs = []
+    
+    def collect_progress(progress: WorkflowProgress):
+        progress_logs.append({
+            "state": progress.state.value,
+            "message": progress.message,
+            "plan_progress": progress.plan_progress,
+            "current_task": progress.current_task,
+            "timestamp": progress.timestamp.isoformat() if progress.timestamp else None
+        })
+    
+    # 使用进度收集器或自定义回调
+    callback = progress_callback or collect_progress
+    
+    # 创建 Agent 并执行
+    agent = create_office_agent(progress_callback=callback)
+    result = agent.execute(user_request)
+    
+    # 转换为字典格式
+    return {
+        "response": result.output.get("summary", "") if result.output else "",
+        "state": {
+            "status": result.success,
+            "progress_logs": progress_logs,
+            "current_plan": agent.get_current_plan(),
+            "verification_summary": agent.get_verification_summary(),
+        },
+        "result": result
+    }
+

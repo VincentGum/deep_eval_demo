@@ -223,6 +223,9 @@ class AgentCapability(str, Enum):
     DATA_TRANSFORM = "data_transform"        # 转换数据
     DATA_AGGREGATE = "data_aggregate"        # 聚合数据
     DATA_EXPORT = "data_export"              # 导出数据
+    DATA_STATISTICS = "data_statistics"      # 统计分析
+    DATA_FILTER = "data_filter"              # 过滤数据
+    DATA_CLEAN = "data_clean"                # 清洗数据
     
     # 文档能力
     DOC_READ = "doc_read"                   # 读取文档

@@ -62,21 +62,13 @@ def main():
         print(result["response"])
 
         print(f"\n[Debug Info]")
-        print(f"  Stage: {result['stage']}")
-        print(f"  Needs Human Review: {result['needs_human_review']}")
-
-        if result["state"].get("plan"):
-            plan = result["state"]["plan"]
-            print(f"  Intent: {plan.intent}")
-            print(f"  Confidence: {plan.confidence:.2f}")
-            print(f"  Tools Used: {plan.tools_to_use}")
-
-        if result["state"].get("verify"):
-            verify = result["state"]["verify"]
-            print(f"  Policy Decision: requires_human={verify.decision.requires_human}, reason={verify.decision.reason}")
-
-        if result["error"]:
-            print(f"  Error: {result['error']}")
+        print(f"  Intent: {result['intent']}")
+        print(f"  Tools Called: {result['tools_called']}")
+        print(f"  Human Review Required: {result['human_review']}")
+        if result['human_review_reason']:
+            print(f"  Human Review Reason: {result['human_review_reason']}")
+        print(f"  Is Sensitive: {result['is_sensitive']}")
+        print(f"  Confidence: {result['confidence']:.2f}")
 
         print()
 

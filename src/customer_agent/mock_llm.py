@@ -141,6 +141,11 @@ class SemanticAnalyzer:
         "退款": "refund",
         "退钱": "refund",
         "退货": "refund",
+        "return": "refund",
+        "charged": "refund",
+        "charge": "refund",
+        "overcharge": "refund",
+        "double": "refund",
         
         # 取消相关动词
         "cancel": "cancel",
@@ -180,6 +185,11 @@ class SemanticAnalyzer:
         "late": "complaint",
         "broken": "complaint",
         "wrong": "complaint",
+        "replacement": "complaint",
+        "replace": "complaint",
+        "defective": "complaint",
+        "crushed": "complaint",
+        "missing": "complaint",
         "损坏": "complaint",
         "坏了": "complaint",
         "有问题": "complaint",
@@ -246,7 +256,8 @@ class SemanticAnalyzer:
         """
         text_lower = text.lower()
         text_no_punct = re.sub(r"[^\w\s]", " ", text_lower)
-        words = set(text_no_punct.split())
+        words_unique = set(text_no_punct.split())
+        words_ordered = text_no_punct.split()  # 保持顺序用于动作动词检测
 
         features = SemanticFeatures()
 
@@ -263,29 +274,41 @@ class SemanticAnalyzer:
                 features.has_order_reference = True
                 break
 
-        # ---- 动作动词检测 ----
-        for word in words:
+        # ---- 动作动词检测（高优先级动作覆盖低优先级） ----
+        # 优先级：refund > cancel > complaint > inquire > help > order > check > policy
+        ACTION_PRIORITY = {"refund": 5, "cancel": 4, "complaint": 3, "inquire": 1, "help": 1, "order": 2, "check": 2, "policy": 2}
+        detected_actions = []  # (priority, action_type)
+        
+        for word in words_ordered:
             if word in self.ACTION_VERBS:
                 features.has_action_verb = True
-                if features.action_type is None:
-                    features.action_type = self.ACTION_VERBS[word]
+                action = self.ACTION_VERBS[word]
+                priority = ACTION_PRIORITY.get(action, 0)
+                detected_actions.append((priority, action))
             # 检查子串匹配（处理复合词）
             for verb, action in self.ACTION_VERBS.items():
                 if verb in word and len(verb) > 3:
                     features.has_action_verb = True
-                    if features.action_type is None:
-                        features.action_type = action
+                    priority = ACTION_PRIORITY.get(action, 0)
+                    detected_actions.append((priority, action))
+        
+        # 选择优先级最高的动作
+        if detected_actions:
+            detected_actions.sort(key=lambda x: x[0], reverse=True)
+            features.action_type = detected_actions[0][1]
         
         # 中文 2 字动词检测（退款、取消 等）
         if features.language == "zh":
             for verb, action in self.ACTION_VERBS.items():
                 if len(verb) == 2 and verb in text:
                     features.has_action_verb = True
-                    if features.action_type is None:
+                    zh_priority = ACTION_PRIORITY.get(action, 0)
+                    curr_priority = ACTION_PRIORITY.get(features.action_type, 0) if features.action_type else 0
+                    if zh_priority > curr_priority:
                         features.action_type = action
 
         # ---- 情感检测 ----
-        for word in words:
+        for word in words_unique:
             if word in self.POSITIVE_WORDS:
                 features.has_positive_emotion = True
                 features.sentiment = "positive"
@@ -301,7 +324,11 @@ class SemanticAnalyzer:
                     break
 
         # ---- 投诉指标检测 ----
-        complaint_indicators = ["damaged", "late", "broken", "wrong", "open", "missing"]
+        complaint_indicators = ["damaged", "late", "broken", "wrong", "open", "missing",
+                                "crushed", "defective", "unacceptable", "terrible", "awful",
+                                "disappointed", "frustrated", "angry", "upset", "poor quality",
+                                "bad quality", "not working", "doesn't work", "not satisfied",
+                                "dented", "scratched", "torn", "leaked", "lost"]
         if any(ind in text_lower for ind in complaint_indicators):
             features.has_negative_emotion = True
             features.sentiment = "negative"
@@ -584,8 +611,8 @@ class ResponseGenerator:
             "urgent": "I see this is urgent. Let me create a cancellation request for {order_info} right away. This will need human review.",
         },
         Intent.COMPLAINT: {
-            "standard": "I'm sorry to hear about your experience with {order_info}. Let me create a complaint case for you so our team can address this issue. This will require human review.",
-            "product_issue": "I'm sorry to hear the product arrived damaged. Let me create a complaint case for {order_info}. Our quality team will review this. This requires human review.",
+            "standard": "I'm sorry to hear about your experience with {order_info}. Let me create a complaint case for you so our team can address this issue.",
+            "product_issue": "I'm sorry to hear the product arrived damaged. Let me create a complaint case for {order_info}. Our quality team will review this.",
         },
         Intent.GREETING: {
             "en": "Hello! I'm here to help you with your order inquiries. How can I assist you today?",
@@ -630,12 +657,13 @@ class ResponseGenerator:
         templates = self.TEMPLATES.get(intent, self.TEMPLATES[Intent.UNKNOWN])
 
         # 选择合适的模板变体
+        question_type = features.question_type or ""
         if isinstance(templates, dict):
             if "emotional" in templates and features.has_negative_emotion:
                 template = templates["emotional"]
-            elif "urgent" in templates and "immediately" in features.question_type:
+            elif "urgent" in templates and "immediately" in question_type:
                 template = templates["urgent"]
-            elif "tracking" in templates and features.question_type == "location":
+            elif "tracking" in templates and question_type == "location":
                 template = templates["tracking"]
             elif "with_order" in templates and order_id:
                 template = templates["with_order"]
@@ -658,7 +686,15 @@ class ResponseGenerator:
         else:
             # 没有订单号时的特殊处理
             if "{order_info}" in template:
-                return "I understand you need help with an order. Could you please provide your order ID so I can assist you better?"
+                # 根据意图类型生成不同的回退消息
+                if intent == Intent.REFUND:
+                    return "I understand you need a refund. Could you please provide your order ID so I can process your refund request?"
+                elif intent == Intent.CANCEL:
+                    return "I understand you want to cancel an order. Could you please provide your order ID so I can process your cancellation?"
+                elif intent == Intent.COMPLAINT:
+                    return "I'm sorry to hear about your issue. Let me create a complaint case for you. Could you please provide your order ID so our team can address this?"
+                else:
+                    return "I understand you need help with an order. Could you please provide your order ID so I can assist you better?"
             elif "{order_id}" in template:
                 template = template.format(order_id="your order")
 

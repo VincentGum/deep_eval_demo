@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict, Annotated, Sequence
+from typing import TypedDict, Annotated, Sequence, Optional
 from datetime import datetime
 
 # LangChain 核心组件
@@ -67,10 +67,12 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     intent: str                    # 识别的用户意图
     tools_called: list[str]       # 已调用的工具名称列表
-    human_review: bool            # 是否需要人工审核
-    human_review_reason: str      # 人工审核的原因
+    human_review: bool            # 是否触发了人工审核流程
+    human_review_reason: str      # 人工审核的原因/结果
+    approval_status: str          # 审核状态: "pending"/"approved"/"rejected"
     is_sensitive: bool            # 是否包含敏感内容
     confidence: float             # 响应置信度 (0.0-1.0)
+    human_approval_func: Optional[callable]  # 人工审批回调函数
 
 
 def add_messages(left: list, right: list) -> list:
@@ -133,11 +135,14 @@ def analyze_intent_node(state: AgentState) -> AgentState:
     
     # 更新状态
     return {
+        "messages": messages,  # 保留消息列表
         "intent": reasoning_result.intent,
         "tools_called": [],          # 清空已调用工具
         "human_review": False,        # 默认不需要人工审核
         "human_review_reason": "",
+        "approval_status": "none",  # 审核状态：none/pending/approved/rejected
         "confidence": reasoning_result.confidence,
+        "human_approval_func": state.get("human_approval_func"),  # 保留审批函数
     }
 
 
@@ -191,6 +196,19 @@ def execute_tools_node(state: AgentState) -> AgentState:
         tools_called.append("get_order_status")
         tool_results.append(str(result) if hasattr(result, 'content') else result)
     
+    elif intent_value == "cancel":
+        # 取消订单 - 敏感操作
+        order_id = reasoning.parameters.get("order_id", "")
+        if order_id:
+            # 有订单号，调用取消工具
+            result = lookup_order.invoke({"query": order_id})
+            tools_called.append("lookup_order")
+            tool_results.append(f"Cancellation request for order {order_id}: {result}")
+        else:
+            # 没有订单号，需要用户确认
+            tools_called.append("cancel_request")
+            tool_results.append("I understand you want to cancel an order. Could you please provide your order ID so I can assist you?")
+    
     # 添加工具执行结果到消息
     if tool_results:
         messages = messages + [AIMessage(content="\n".join(tool_results))]
@@ -198,6 +216,7 @@ def execute_tools_node(state: AgentState) -> AgentState:
     return {
         "messages": messages,
         "tools_called": state["tools_called"] + tools_called,
+        "human_approval_func": state.get("human_approval_func"),  # 保留审批函数
     }
 
 
@@ -226,16 +245,19 @@ def verify_response_node(state: AgentState) -> AgentState:
         state.get("intent", "")
     )
     
-    # 检查是否包含敏感内容
-    is_sensitive = len(sensitive_words) > 0
+    # 检查原始请求是否包含敏感内容（由 analyze_intent_node 设置）
+    is_sensitive = state.get("is_sensitive", False)
     
-    # 检查是否为敏感操作（如退款）
+    # 检查是否为敏感操作（如退款、取消）
     intent = state.get("intent", "")
     intent_value = intent.value if isinstance(intent, Intent) else intent
+    tools_called = state.get("tools_called", [])
     requires_human_review = (
         is_sensitive or 
         intent_value == "refund" or
-        "refund" in state.get("tools_called", [])
+        intent_value == "cancel" or
+        "refund" in tools_called or
+        "cancel_request" in tools_called
     )
     
     # 构建审核原因
@@ -249,7 +271,10 @@ def verify_response_node(state: AgentState) -> AgentState:
         "is_sensitive": is_sensitive,
         "human_review": requires_human_review,
         "human_review_reason": reason,
+        "approval_status": "pending" if requires_human_review else "none",
         "confidence": confidence,
+        "human_approval_func": state.get("human_approval_func"),  # 保留审批函数
+        "messages": state.get("messages"),  # 保留消息列表
     }
 
 
@@ -291,12 +316,15 @@ def human_review_node(state: AgentState) -> AgentState:
         reason = "审批函数执行失败"
     
     # 根据审批结果更新状态
+    # 注意：human_review 字段语义变更为"是否触发了人工审核流程"
+    # approval_status 字段表示审核结果: "pending", "approved", "rejected"
     if approved:
-        state["human_review"] = False  # 审核通过，不需要等待
+        state["human_review"] = True  # 触发了审核流程（只是已通过）
+        state["approval_status"] = "approved"
         state["human_review_reason"] = f"已批准: {reason}" if reason else "已批准"
     else:
-        # 审核拒绝，保持 human_review 状态，generate_response 会输出提示
-        state["human_review"] = True
+        state["human_review"] = True  # 触发了审核流程且被拒绝
+        state["approval_status"] = "rejected"
         state["human_review_reason"] = f"已拒绝: {reason}" if reason else "已拒绝"
     
     return state
@@ -318,27 +346,64 @@ def generate_response_node(state: AgentState) -> AgentState:
     """
     messages = state["messages"]
     
+    # 获取审批状态
+    approval_status = state.get("approval_status", "none")
+    human_review_reason = state.get("human_review_reason", "")
+    
     # 如果需要人工审核
     if state.get("human_review"):
-        review_msg = (
-            f"\n\n[待人工审核]\n"
-            f"原因: {state.get('human_review_reason', '请确认操作')}\n"
-            f"请确认是否继续执行。"
-        )
-        messages = messages + [AIMessage(content=review_msg)]
+        if approval_status == "approved":
+            # 审批已通过，生成最终结果
+            if state["messages"]:
+                response_intro = "I'm a customer service assistant. "
+                current_msg = messages[-1].content
+                if not current_msg.startswith(response_intro):
+                    messages = messages[:-1] + [AIMessage(content=response_intro + current_msg)]
+                # 添加审批通过标识
+                messages = messages[:-1] + [AIMessage(
+                    content=f"[人工审核已批准 Approved]\n{messages[-1].content}"
+                )]
+        elif approval_status == "rejected":
+            # 审批被拒绝，返回拒绝消息
+            messages = messages + [AIMessage(content="I'm sorry, but your request has been rejected after human review. Please contact customer service for further assistance.")]
+        else:
+            # 待审核状态
+            review_msg = (
+                f"\n\n[待人工审核]\n"
+                f"原因: {human_review_reason or '请确认操作'}\n"
+                f"请确认是否继续执行。"
+            )
+            messages = messages + [AIMessage(content=review_msg)]
     else:
-        # 正常响应 - 添加回复前缀
+        # 正常响应 - 使用 MockLLM 生成合适的回复
         if state["messages"]:
+            intent = state.get("intent", "")
+            intent_value = intent.value if isinstance(intent, Intent) else intent
+            
+            # 对于没有工具调用的意图（complaint, greeting, thanks, off_topic 等），
+            # 使用 MockLLM 的 ResponseGenerator 生成合适的回复，而不是直接回显用户消息
+            user_message = messages[0].content if messages else ""
+            
+            # 从用户消息中提取订单号
+            import re as _re
+            order_id = None
+            for pattern in [r"order\s*#?\s*([A-Z0-9]{3,})", r"#([A-Z0-9]{3,})", r"订单[号#]?\s*([A-Z0-9]+)"]:
+                match = _re.search(pattern, user_message, _re.IGNORECASE)
+                if match:
+                    order_id = match.group(0)
+                    break
+            
+            # 使用已有的 intent + analyzer 生成模板回复（不重新推理意图）
+            features = llm.analyzer.analyze(user_message)
+            generated_response = llm.generator.generate(
+                intent=intent if isinstance(intent, Intent) else Intent(intent_value),
+                features=features,
+                reasoning="",
+                order_id=order_id,
+            )
+            
             response_intro = "I'm a customer service assistant. "
-            current_msg = messages[-1].content
-            
-            # 如果之前有审核（已批准或已拒绝），在响应中说明
-            reason = state.get("human_review_reason", "")
-            if reason and ("已批准" in reason or "人工" in reason or "审核" in reason):
-                current_msg = f"[人工审核已批准]\n{current_msg}"
-            
-            if not current_msg.startswith(response_intro):
-                messages = messages[:-1] + [AIMessage(content=response_intro + current_msg)]
+            messages = messages + [AIMessage(content=response_intro + generated_response)]
     
     return {"messages": messages}
 
@@ -363,7 +428,7 @@ def should_execute_tools(state: AgentState) -> str:
     intent_value = intent.value if isinstance(intent, Intent) else intent
     
     # 这些意图需要执行工具
-    tool_intents = {"order_status", "refund", "policy"}
+    tool_intents = {"order_status", "refund", "policy", "cancel"}
     
     if intent_value in tool_intents:
         return "execute_tools"
@@ -508,6 +573,7 @@ def invoke_customer_agent(
         "tools_called": [],
         "human_review": False,
         "human_review_reason": "",
+        "approval_status": "none",  # 审核状态
         "is_sensitive": False,
         "confidence": 1.0,
         "human_approval_func": human_approval_func,  # 传递审批函数

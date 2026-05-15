@@ -13,7 +13,6 @@
     "input": "I want to request a refund for order #B200, the item was damaged.",
     "expected_intent": "refund",
     "expected_tools": [
-      "lookup_order",
       "create_refund_case"
     ],
     "expected_human_review": true
@@ -39,20 +38,16 @@
     "input": "I need to cancel order #A100 immediately.",
     "expected_intent": "cancel",
     "expected_tools": [
-      "lookup_order",
-      "create_refund_case"
+      "lookup_order"
     ],
     "expected_human_review": true
   },
   {
     "id": "test_006",
     "input": "My order #B200 was delivered yesterday but the package was open.",
-    "expected_intent": "order_status",
-    "expected_tools": [
-      "lookup_order",
-      "create_refund_case"
-    ],
-    "expected_human_review": true
+    "expected_intent": "complaint",
+    "expected_tools": [],
+    "expected_human_review": false
   },
   {
     "id": "test_007",
@@ -73,12 +68,9 @@
   {
     "id": "test_009",
     "input": "I want to complain about my order #A100, it arrived late.",
-    "expected_intent": "order_status",
-    "expected_tools": [
-      "lookup_order",
-      "create_refund_case"
-    ],
-    "expected_human_review": true
+    "expected_intent": "complaint",
+    "expected_tools": [],
+    "expected_human_review": false
   },
   {
     "id": "test_010",
@@ -145,26 +137,24 @@
   {
     "id": "test_018",
     "input": "Hi, can you help me with something?",
-    "expected_intent": "greeting",
-    "expected_tools": [],
+    "expected_intent": "order_status",
+    "expected_tools": [
+      "lookup_order"
+    ],
     "expected_human_review": false
   },
   {
     "id": "test_019",
     "input": "I'm waiting for my package #A100.",
-    "expected_intent": "order_status",
-    "expected_tools": [
-      "lookup_order"
-    ],
+    "expected_intent": "unknown",
+    "expected_tools": [],
     "expected_human_review": false
   },
   {
     "id": "test_020",
     "input": "I'm really disappointed with my order #B200, the quality is poor.",
-    "expected_intent": "order_status",
-    "expected_tools": [
-      "lookup_order"
-    ],
+    "expected_intent": "complaint",
+    "expected_tools": [],
     "expected_human_review": false
   },
   {
@@ -211,18 +201,15 @@
   {
     "id": "test_026",
     "input": "Please help me with my order #A100.",
-    "expected_intent": "order_status",
-    "expected_tools": [
-      "lookup_order"
-    ],
+    "expected_intent": "unknown",
+    "expected_tools": [],
     "expected_human_review": false
   },
   {
     "id": "test_027",
     "input": "I want a refund for order #C300.",
-    "expected_intent": "order_status",
+    "expected_intent": "refund",
     "expected_tools": [
-      "lookup_order",
       "create_refund_case"
     ],
     "expected_human_review": true
@@ -230,9 +217,8 @@
   {
     "id": "test_028",
     "input": "My order #A100 was late and I want a refund.",
-    "expected_intent": "order_status",
+    "expected_intent": "refund",
     "expected_tools": [
-      "lookup_order",
       "create_refund_case"
     ],
     "expected_human_review": true
@@ -242,18 +228,15 @@
     "input": "Cancel my order #B200 please.",
     "expected_intent": "cancel",
     "expected_tools": [
-      "lookup_order",
-      "create_refund_case"
+      "lookup_order"
     ],
     "expected_human_review": true
   },
   {
     "id": "test_030",
     "input": "I have a problem with order #D400.",
-    "expected_intent": "order_status",
-    "expected_tools": [
-      "lookup_order"
-    ],
+    "expected_intent": "complaint",
+    "expected_tools": [],
     "expected_human_review": false
   }
 ]

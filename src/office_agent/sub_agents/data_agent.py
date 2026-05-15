@@ -191,10 +191,9 @@ class DataAgent(BaseSubAgent):
     @property
     def capabilities(self) -> list[AgentCapability]:
         return [
-            AgentCapability.DATA_STATISTICS,
+            AgentCapability.DATA_QUERY,
+            AgentCapability.DATA_TRANSFORM,
             AgentCapability.DATA_AGGREGATE,
-            AgentCapability.DATA_FILTER,
-            AgentCapability.DATA_CLEAN,
         ]
     
     def can_handle(self, task: Task) -> bool:

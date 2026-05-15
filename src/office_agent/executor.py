@@ -43,7 +43,7 @@ from .base import (
     BaseSubAgent,
     ExecutionResult,
 )
-from .sub_agents.registry import find_agent_for_task
+from .sub_agents.registry import Registry, get_registry
 
 
 # ============================================================================
@@ -270,7 +270,8 @@ class TaskExecutor:
             ))
         
         # 查找合适的 Agent
-        agent = find_agent_for_task(task)
+        registry = get_registry()
+        agent = registry.find_agent_by_capability(task.capability_required)
         if not agent:
             return TaskResult(
                 task_id=task.id,
